@@ -1,0 +1,6 @@
+{$YINGXING_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy app:4174 {
+        header_up X-Forwarded-For {remote_host}
+    }
+}

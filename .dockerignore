@@ -1,0 +1,10 @@
+node_modules
+dist
+data
+online-data
+release
+test-output
+.env
+.env.production
+.git
+*.log

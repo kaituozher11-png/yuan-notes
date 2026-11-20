@@ -1,0 +1,31 @@
+.mindmap-shapes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mindmap-shapes button {
+  gap: 5px;
+  padding: 0 7px;
+  cursor: grab;
+}
+
+.mindmap-shape-icon {
+  display: inline-block;
+  width: 17px;
+  height: 12px;
+  border: 2px solid currentColor;
+  flex: none;
+}
+
+.mindmap-shape-icon.shape-square { width: 13px; height: 13px; }
+.mindmap-shape-icon.shape-circle { width: 14px; height: 14px; border-radius: 50%; }
+.mindmap-shape-icon.shape-ellipse { border-radius: 50%; }
+.mindmap-shape-icon.shape-diamond { width: 12px; height: 12px; transform: rotate(45deg); margin: 0 3px; }
+.mindmap-tools button.active { color: #176d72; border-color: #79b4b3; background: #e6f2f0; }
+.mindmap-connect-status { display: inline-flex; align-items: center; gap: 5px; color: #176d72; font-size: 12px; }
+.mindmap-connect-status button { border: 0; background: transparent; color: inherit; padding: 3px; }
+.mindmap-edge.selected path:first-child { filter: drop-shadow(0 0 3px #1b8d87); }
+.mindmap-node-label { justify-content: center; text-align: center; }
+.note-block:has(.mindmap) { border-color: #cbdedd; }
+.note-block:has(.mindmap) .mindmap-viewport { height: 500px; }

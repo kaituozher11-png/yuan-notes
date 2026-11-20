@@ -1,0 +1,41 @@
+name: yingxing-notes
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      YINGXING_PUBLIC_ORIGIN: https://${YINGXING_DOMAIN:?Set YINGXING_DOMAIN in .env.production}
+      YINGXING_TRUST_PROXY: "1"
+    volumes:
+      - yingxing_data:/app/data
+    expose:
+      - "4174"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4174/api/health',{headers:{Host:process.env.YINGXING_PUBLIC_ORIGIN.replace('https://','')}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  web:
+    image: caddy:2.10
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      YINGXING_DOMAIN: ${YINGXING_DOMAIN:?Set YINGXING_DOMAIN in .env.production}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  yingxing_data:
+  caddy_data:
+  caddy_config:

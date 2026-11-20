@@ -1,0 +1,161 @@
+.rich-inline-formula math-field {
+  border-color: transparent;
+  background: transparent;
+}
+
+.rich-inline-formula math-field:hover,
+.rich-inline-formula math-field:focus {
+  border-color: #b7d5d2;
+  background: #f2f9f7;
+}
+
+.rich-formula-toolbar {
+  padding: 10px 0 12px;
+  border-bottom: 1px solid #dfe9e9;
+}
+
+.rich-formula-toolbar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  color: #456a6d;
+  font-size: 12px;
+}
+
+.rich-formula-toolbar-head button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #456a6d;
+}
+
+.rich-note-surface .rich-formula {
+  display: inline-block;
+  vertical-align: baseline;
+  padding: 0 2px;
+  border-bottom: 1px dotted #86b9b4;
+  cursor: pointer;
+}
+
+.rich-note-surface .node-formulaInline.ProseMirror-selectednode,
+.rich-note-surface .rich-formula.ProseMirror-selectednode {
+  outline: 2px solid #2d9b9b;
+  outline-offset: 2px;
+}
+
+.rich-image-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 42px;
+  padding: 5px 0;
+  border-bottom: 1px solid #dfe9e9;
+  color: #4e6d71;
+  font-size: 12px;
+}
+
+.rich-image-toolbar label,
+.rich-image-align {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rich-image-toolbar input[type=range] {
+  width: 110px;
+  accent-color: #197980;
+}
+
+.rich-image-toolbar output {
+  min-width: 35px;
+  text-align: right;
+}
+
+.rich-image-toolbar button {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #456a6d;
+}
+
+.rich-image-toolbar button:hover,
+.rich-image-toolbar button.active {
+  border-color: #b8d8d5;
+  background: #e6f2f0;
+  color: #176d72;
+}
+
+.rich-image-toolbar > button:last-child {
+  margin-left: auto;
+}
+
+.rich-note-surface::after {
+  content: '';
+  display: block;
+  clear: both;
+}
+
+.rich-note-surface {
+  min-height: 120px;
+  padding: 12px 14px;
+  border: 1px solid #d5e3e4;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.rich-note-surface:focus-within {
+  border-color: #79b4b3;
+}
+
+.note-block:has(.rich-note-editor) {
+  margin: 14px 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.rich-note-surface img[data-rich-note-image] {
+  display: block;
+  max-width: 100%;
+  max-height: 650px;
+  height: auto;
+  object-fit: contain;
+  cursor: pointer;
+}
+
+.rich-note-surface img[data-rich-note-image][data-align=left] {
+  float: left;
+  margin: 3px 12px 10px 0;
+}
+
+.rich-note-surface img[data-rich-note-image][data-align=right] {
+  float: right;
+  margin: 3px 0 10px 12px;
+}
+
+.rich-note-surface img[data-rich-note-image][data-align=center] {
+  float: none;
+  margin: 8px auto 12px;
+}
+
+.rich-note-surface img[data-rich-note-image].ProseMirror-selectednode {
+  outline: 2px solid #2d9b9b;
+  outline-offset: 3px;
+}
+
+@media (max-width: 600px) {
+  .rich-image-toolbar input[type=range] {
+    width: 80px;
+  }
+
+}
