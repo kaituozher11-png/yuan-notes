@@ -9,8 +9,8 @@ import { edgeLabelPosition, edgePath, MAP_WIDTH, MAP_HEIGHT, nodeSize, normalize
 import { imageWidth } from './imageLayout';
 import { freeNoteBlocks } from './richDocument';
 import katex from 'katex';
+import { aiNoteSections } from './aiNoteOutline';
 
-const titles = [['summary', '这页讲什么'], ['concepts', '核心概念'], ['important', '重点与难点'], ['cautions', '易错点与注意事项'], ['formula', '公式与图表'], ['quiz', '快速自测']];
 const Markdown = ({ children }) => <ReactMarkdown remarkPlugins={[remarkMath, remarkGfm]} rehypePlugins={[rehypeKatex]}>{String(children || '')}</ReactMarkdown>;
 
 function DrawingPrint({ strokes = [], height }) {
@@ -77,7 +77,7 @@ function PrintDocument({ doc, notes }) {
       <h2>原文第 {page} 页</h2>
       {pageNotes.map((note) => <article key={note.id}>
         <div className="note-kind">{note.kind === 'ai' ? '智能笔记' : '我的笔记'}</div><h3>{note.title}</h3>
-        {note.ai && <div className="ai-print">{titles.map(([key, title]) => { const value = note.ai[key]; if (!value?.length) return null; return <section key={key}><h4>{title}</h4>{key === 'formula' && Array.isArray(value) ? value.map((item, i) => <FormulaEntry value={item} output="mathml" key={i} />) : Array.isArray(value) ? <ul>{value.map((item, i) => <li key={i}><Markdown>{item}</Markdown></li>)}</ul> : <Markdown>{value}</Markdown>}</section>; })}</div>}
+        {note.ai && <div className="ai-print">{aiNoteSections(note.ai).map(({ key, title, value, kind }) => <section key={key}><h4>{title}</h4>{kind === 'formula' && Array.isArray(value) ? value.map((item, i) => <FormulaEntry value={item} output="mathml" key={i} />) : Array.isArray(value) ? <ul>{value.map((item, i) => <li key={i}><Markdown>{item}</Markdown></li>)}</ul> : <Markdown>{value}</Markdown>}</section>)}</div>}
         {note.kind === 'user' && note.blocks?.length
           ? freeNoteBlocks(note.blocks).map((block) => <PrintBlock key={block.id} block={block}/>)
           : note.blocks?.map((block) => <PrintBlock key={block.id} block={block} />)}

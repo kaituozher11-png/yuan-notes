@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Download,
   FileText,
   Eraser,
@@ -50,6 +51,7 @@ import remarkGfm from "remark-gfm";
 import rehypeKatex from "rehype-katex";
 import { api, json } from "./api";
 import { applyModelPreset, modelProviders } from './modelCatalog';
+import { aiNotePresets, aiNoteSections, validateAiGuidance, validateAiOutline } from './aiNoteOutline';
 import { clampNoteWidth, noteWidthLimits } from './notePaneLayout';
 import { seal, openVault } from "./vault";
 import Drawing from "./Drawing";
@@ -64,14 +66,6 @@ const FormulaEditor = lazy(() => import("./FormulaEditor"));
 const RichNoteEditor = lazy(() => import("./RichNoteEditor"));
 
 const defaultTemplate = { id: "default", name: "自由笔记", sections: [], style: { accent: '#176d72', paper: 'plain' } };
-const sections = [
-  ["summary", "这页讲什么"],
-  ["concepts", "核心概念"],
-  ["important", "重点与难点"],
-  ["cautions", "易错点与注意事项"],
-  ["formula", "公式与图表"],
-  ["quiz", "快速自测"],
-];
 const stamp = (value) =>
   value ? new Date(value).toLocaleDateString("zh-CN") : "";
 const noteSearchText = (note) => {
@@ -279,29 +273,31 @@ function NoteEditor({ note, update, addLink, onJump, onEditRegion, onRemoveLink,
                   {editingAi ? "完成修改" : "修改内容"}
                 </button>
               </div>
-              {sections.map(([key, title]) => {
-                const value = note.ai[key];
-                if (!value || (Array.isArray(value) && !value.length))
-                  return null;
+              {aiNoteSections(note.ai).map(({ key, title, value, kind, index }) => {
                 return (
                   <section className="ai-section" key={key}>
-                    <h3>{title}</h3>
+                    {editingAi && kind === 'custom' ? (
+                      <input
+                        className="ai-section-title-edit"
+                        aria-label={`${title} 标题`}
+                        value={title}
+                        maxLength={60}
+                        onChange={(e) => patch({ ai: { ...note.ai, sections: note.ai.sections.map((section, position) => position === index ? { ...section, title: e.target.value } : section) } })}
+                      />
+                    ) : <h3>{title}</h3>}
                     {editingAi ? (
                       <textarea
                         aria-label={title}
                         value={Array.isArray(value) ? value.join("\n") : value}
                         onChange={(e) =>
                           patch({
-                            ai: {
-                              ...note.ai,
-                              [key]: Array.isArray(value)
-                                ? e.target.value.split("\n")
-                                : e.target.value,
-                            },
+                            ai: kind === 'custom'
+                              ? { ...note.ai, sections: note.ai.sections.map((section, position) => position === index ? { ...section, content: e.target.value } : section) }
+                              : { ...note.ai, [key]: Array.isArray(value) ? e.target.value.split("\n") : e.target.value },
                           })
                         }
                       />
-                    ) : key === 'formula' && Array.isArray(value) ? (
+                    ) : kind === 'formula' && Array.isArray(value) ? (
                       <div className="ai-formula-list">
                         {value.map((item, index) => <FormulaEntry value={item} key={index} />)}
                       </div>
@@ -543,6 +539,12 @@ export default function App({ account, onAccount }) {
   const [editingModel, setEditingModel] = useState(null);
   const [range, setRange] = useState("current");
   const [rangeText, setRangeText] = useState("");
+  const [aiOutline, setAiOutline] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(`yingxing.ai-outline.${account?.id || 'local'}`));
+      return { preset: saved.preset, titles: validateAiOutline(saved.titles), guidance: validateAiGuidance(saved.guidance || '') };
+    } catch { return { preset: 'course', titles: [...aiNotePresets.course.titles], guidance: '' }; }
+  });
   const [progress, setProgress] = useState(null);
   const [preview, setPreview] = useState(null);
   const toastTimer = useRef(null);
@@ -561,6 +563,9 @@ export default function App({ account, onAccount }) {
   useEffect(() => {
     saveModels(models, account);
   }, [models, account]);
+  useEffect(() => {
+    localStorage.setItem(`yingxing.ai-outline.${account?.id || 'local'}`, JSON.stringify(aiOutline));
+  }, [aiOutline, account]);
   useEffect(() => {
     if (screen !== 'workspace' || !panelsRef.current) return;
     const element = panelsRef.current;
@@ -987,6 +992,8 @@ export default function App({ account, onAccount }) {
       if (window.YuanOfflineApp && !modelOnline()) throw new Error('无法生成智能笔记，请联网');
       if (!activeModel || !selectedKey)
         throw new Error("请先在模型连接页配置并解锁 API");
+      const outline = validateAiOutline(aiOutline.titles);
+      const guidance = validateAiGuidance(aiOutline.guidance);
       await flushSaves();
       const pages = pagesToGenerate();
       stopRef.current = false;
@@ -1011,6 +1018,8 @@ export default function App({ account, onAccount }) {
             model: activeModel.model,
             key: selectedKey,
             vision: activeModel.vision,
+            outline,
+            guidance,
             preview: true,
           }),
         );
@@ -1052,6 +1061,8 @@ export default function App({ account, onAccount }) {
               model: activeModel.model,
               key: selectedKey,
               vision: activeModel.vision,
+              outline,
+              guidance,
             }),
           );
           await reload();
@@ -2006,33 +2017,25 @@ export default function App({ account, onAccount }) {
                     <div className="compare-grid">
                       <div>
                         <strong>原有内容</strong>
-                        {sections.map(([key, title]) =>
-                          preview.previous?.[key]?.length ? (
+                        {aiNoteSections(preview.previous).map(({ key, title, value }) => (
                             <section key={key}>
                               <h3>{title}</h3>
                               <p>
-                                {Array.isArray(preview.previous[key])
-                                  ? preview.previous[key].join("；")
-                                  : preview.previous[key]}
+                                {Array.isArray(value) ? value.join("；") : value}
                               </p>
                             </section>
-                          ) : null,
-                        )}
+                        ))}
                       </div>
                       <div>
                         <strong>新草稿</strong>
-                        {sections.map(([key, title]) =>
-                          preview.ai[key]?.length ? (
+                        {aiNoteSections(preview.ai).map(({ key, title, value }) => (
                             <section key={key}>
                               <h3>{title}</h3>
                               <p>
-                                {Array.isArray(preview.ai[key])
-                                  ? preview.ai[key].join("；")
-                                  : preview.ai[key]}
+                                {Array.isArray(value) ? value.join("；") : value}
                               </p>
                             </section>
-                          ) : null,
-                        )}
+                        ))}
                       </div>
                     </div>
                     <div className="modal-actions">
@@ -2076,6 +2079,39 @@ export default function App({ account, onAccount }) {
                         />
                       </label>
                     )}
+                    <div className="ai-outline-editor">
+                      <strong>智能笔记模板</strong>
+                      <div className="ai-preset-switch" role="group" aria-label="智能笔记模板">
+                        {Object.entries(aiNotePresets).map(([key, preset]) => (
+                          <button key={key} type="button" className={aiOutline.preset === key ? 'active' : ''} disabled={busy}
+                            onClick={() => setAiOutline((current) => ({ ...current, preset: key, titles: [...preset.titles] }))}>{preset.name}</button>
+                        ))}
+                      </div>
+                      <div className="ai-outline-head"><span>生成标题与顺序</span><span>{aiOutline.titles.length} / 12</span></div>
+                      <div className="ai-outline-list">
+                        {aiOutline.titles.map((title, index) => (
+                          <div className="ai-outline-row" key={index}>
+                            <span>{index + 1}</span>
+                            <input aria-label={`第 ${index + 1} 个笔记标题`} maxLength={60} value={title} disabled={busy}
+                              onChange={(event) => setAiOutline((current) => ({ ...current, titles: current.titles.map((item, position) => position === index ? event.target.value : item) }))} />
+                            <IconButton title={`上移第 ${index + 1} 个标题`} disabled={busy || index === 0}
+                              onClick={() => setAiOutline((current) => { const titles = [...current.titles]; [titles[index - 1], titles[index]] = [titles[index], titles[index - 1]]; return { ...current, titles }; })}><ChevronUp size={16} /></IconButton>
+                            <IconButton title={`下移第 ${index + 1} 个标题`} disabled={busy || index === aiOutline.titles.length - 1}
+                              onClick={() => setAiOutline((current) => { const titles = [...current.titles]; [titles[index + 1], titles[index]] = [titles[index], titles[index + 1]]; return { ...current, titles }; })}><ChevronDown size={16} /></IconButton>
+                            <IconButton title={`删除第 ${index + 1} 个标题`} disabled={busy || aiOutline.titles.length <= 1}
+                              onClick={() => setAiOutline((current) => ({ ...current, titles: current.titles.filter((_, position) => position !== index) }))}><Trash2 size={16} /></IconButton>
+                          </div>
+                        ))}
+                      </div>
+                      <button type="button" className="secondary-button ai-outline-add" disabled={busy || aiOutline.titles.length >= 12}
+                        onClick={() => setAiOutline((current) => ({ ...current, titles: [...current.titles, ''] }))}><Plus size={15} /> 添加标题</button>
+                    </div>
+                    <label className="ai-guidance">
+                      补充生成要求（可选）
+                      <textarea value={aiOutline.guidance} maxLength={1000} rows={3} disabled={busy}
+                        placeholder="例如：重点解释方法推导，简述研究背景"
+                        onChange={(event) => setAiOutline((current) => ({ ...current, guidance: event.target.value }))} />
+                    </label>
                     <label>
                       使用已保存的模型连接
                       <select

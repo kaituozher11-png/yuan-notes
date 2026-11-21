@@ -28,6 +28,26 @@ test('keeps full-width headings and genuine one-column pages selectable', () => 
   assert.deepEqual(selectionColumnBounds(page, title.rect, [title, ...distantColumns]), { left: 100, right: 700 });
 });
 
+test('does not stop at the page midpoint when one line is split around a formula', () => {
+  const splitLine = [
+    run('start', '标会在角度', 190, 250, 150, 162),
+    run('body', '距离平面上形成一个尖锐峰值。而引入', 254, 459, 150, 162),
+    run('formula', 'C(θ)', 460, 486, 150, 162),
+    run('end', '后，匹配滤波输出会沿', 487, 608, 150, 162),
+    run('next', '一条斜线扩散。', 145, 260, 172, 184),
+  ];
+  const bounds = selectionColumnBounds(page, splitLine[0].rect, splitLine);
+  assert.deepEqual(bounds, { left: 100, right: 700 });
+  assert.equal(nearestTextRun(splitLine, 540, 156, bounds).run.id, 'end');
+  assert.equal(selectVisibleText(splitLine, { id: 'start', offset: 0 }, { id: 'end', offset: 6 }, bounds).text,
+    '标会在角度距离平面上形成一个尖锐峰值。而引入C(θ)后，匹配滤波');
+});
+
+test('adjacent text fragments on both sides of the midpoint remain one line', () => {
+  const fragments = [run('left', '连续文字', 110, 395, 50, 62), run('right', '继续文字', 405, 650, 50, 62)];
+  assert.deepEqual(selectionColumnBounds(page, fragments[0].rect, fragments), { left: 100, right: 700 });
+});
+
 test('does not mistake a nearby left line for right text in the gap between rows', () => {
   const staggered = [run('left', 'left', 110, 350, 20, 30), run('right', 'right', 410, 650, 10, 20)];
   assert.equal(nearestTextRun(staggered, 430, 23, { left: 100, right: 700 }).run.id, 'right');

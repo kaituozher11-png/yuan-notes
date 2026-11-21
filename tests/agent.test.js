@@ -57,3 +57,24 @@ test('model adapter handles success, malformed output and authentication errors'
   mode = 'invalid-model-no-detail';
   await assert.rejects(callModel({ ...input, test: true }), /核对接口地址、模型 ID 和请求参数/);
 });
+
+test('model adapter sends custom headings and rejects incomplete generated notes', async (t) => {
+  let responseSections = [{ content: '方法分析' }, { content: '$E=mc^2$' }];
+  const server = http.createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    const payload = JSON.parse(raw);
+    assert.match(payload.messages[0].content, /研究方法/);
+    assert.match(payload.messages[0].content, /公式推导/);
+    assert.match(payload.messages[0].content, /突出关键结论/);
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ sections: responseSections }) } }] }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const input = { endpoint: `http://127.0.0.1:${server.address().port}/v1`, key: 'test-key', model: 'study-model', page: 2, text: '能量守恒定律', outline: ['研究方法', '公式推导'], guidance: '突出关键结论' };
+  const note = await callModel(input);
+  assert.deepEqual(note.sections.map(({ title }) => title), input.outline);
+  assert.equal(note.sections[1].content, '$E=mc^2$');
+  responseSections = [{ content: '缺少一项' }];
+  await assert.rejects(callModel(input), /完整笔记/);
+});

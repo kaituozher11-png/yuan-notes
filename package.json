@@ -59,6 +59,7 @@
     "files": [
       "dist/**/*",
       "server/**/*",
+      "src/aiNoteOutline.js",
       "desktop/**/*",
       "package.json"
     ],

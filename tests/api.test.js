@@ -121,7 +121,10 @@ test('document and note API preserves personal work across generation', async (t
     const body = JSON.parse(raw);
     receivedImage = !!body.messages[1].content.find((part) => part.type === 'image_url')?.image_url.url.startsWith('data:image/jpeg;base64,');
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: 'Energy is conserved.', concepts: [], important: [], cautions: [], formula: [], quiz: [], evidence: [{ quote: 'Energy conservation rule', note: 'title' }] }) } }] }));
+    const answer = body.messages[0].content.includes('"sections"')
+      ? { sections: [{ title: 'model title', content: 'Research question' }, { content: 'Result from page' }] }
+      : { summary: 'Energy is conserved.', concepts: [], important: [], cautions: [], formula: [], quiz: [], evidence: [{ quote: 'Energy conservation rule', note: 'title' }] };
+    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(answer) } }] }));
   });
   await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
   t.after(() => modelServer.close());
@@ -138,6 +141,15 @@ test('document and note API preserves personal work across generation', async (t
   assert.equal(preview.data.previous.summary, 'Energy is conserved.');
   assert.equal((await request(base, '/api/generate/commit', options({ token: preview.data.token }))).status, 200);
   assert.equal((await request(base, '/api/generate/commit', options({ token: preview.data.token }))).status, 410);
+  const outline = ['研究背景', '我的结论'];
+  const customPreview = await request(base, '/api/generate', options({ ...model, outline, guidance: '突出公式', preview: true }));
+  assert.equal(customPreview.status, 200);
+  assert.equal(customPreview.data.previous.summary, 'Energy is conserved.');
+  assert.deepEqual(customPreview.data.ai.sections.map((section) => section.title), outline);
+  const committed = await request(base, '/api/generate/commit', options({ token: customPreview.data.token }));
+  assert.equal(committed.status, 200);
+  assert.deepEqual(committed.data.ai.sections.map((section) => section.title), outline);
+  assert.equal((await request(base, '/api/generate', options({ ...model, outline: [''], preview: true }))).status, 400);
   const state = (await request(base, '/api/state')).data;
   assert.equal(state.notes.find((n) => n.id === created.data.id).blocks[0].text, 'My own explanation');
   assert.deepEqual(state.notes.find((n) => n.id === created.data.id).blocks[1], mixed);

@@ -12,7 +12,9 @@ const server = http.createServer(async (req, res) => {
   }
   const user = body.messages?.[1]?.content;
   const text = typeof user === 'string' ? user : user?.[0]?.text || '';
-  const content = text === '连接测试' ? 'OK' : JSON.stringify({
+  const titleList = body.messages?.[0]?.content.match(/按以下标题及顺序生成笔记：(\[[^\]]*\])。只返回/)?.[1];
+  const outline = titleList ? JSON.parse(titleList) : null;
+  const content = outline ? JSON.stringify({ sections: outline.map((title) => ({ content: `第 1 页关于${title}的测试内容。` })) }) : JSON.stringify({
     summary: '本页介绍守恒规律。',
     concepts: ['能量在系统中发生转化。'],
     important: ['先明确系统边界。'],

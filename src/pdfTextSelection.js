@@ -22,13 +22,22 @@ export function selectionColumnBounds(page, text, runs) {
   const gutter = page.width * .01;
   const anchorY = (text.top + text.bottom) / 2;
   const band = Math.max(page.height * .15, text.height * 5);
-  const body = runs.filter(({ rect }) => rect.width >= minWidth && rect.width <= page.width * .52 &&
+  const nearby = runs.filter(({ rect }) =>
     rect.height > 0 && rect.height < page.height * .08 &&
     Math.abs((rect.top + rect.bottom) / 2 - anchorY) <= band);
+  // A PDF may split one full-width line into several text spans around a formula.
+  // Such spans are not evidence of two columns, even when they sit on both sides.
+  const sameLine = nearby.filter(({ rect }) =>
+    Math.abs((rect.top + rect.bottom) / 2 - anchorY) <= Math.max(rect.height, text.height) * .55);
+  const crossesGutter = ({ rect }) => rect.width >= minWidth &&
+    rect.left < middle - page.width * .03 && rect.right > middle + page.width * .03;
+  if (sameLine.some(crossesGutter) || nearby.filter(crossesGutter).length >= 2) return full;
+  const body = nearby.filter(({ rect }) => rect.width >= minWidth && rect.width <= page.width * .52);
   const left = body.filter(({ rect }) => rect.right < middle - gutter);
   const right = body.filter(({ rect }) => rect.left > middle + gutter);
   const paired = left.filter(({ rect }) => right.some(({ rect: other }) =>
-    Math.abs((rect.top + rect.bottom) - (other.top + other.bottom)) / 2 <= Math.max(rect.height, other.height) * 1.5));
+    Math.abs((rect.top + rect.bottom) - (other.top + other.bottom)) / 2 <= Math.max(rect.height, other.height) * 1.5 &&
+    other.left - rect.right > page.width * .04));
   if (!paired.length) return full;
 
   return (text.left + text.right) / 2 < middle
@@ -65,7 +74,8 @@ export function selectVisibleText(runs, anchor, focus, bounds) {
   for (const segment of segments) {
     if (previous) {
       if (segment.line !== previous.line) text += '\n';
-      else if (segment.rect.left - previous.rect.right > Math.max(2, segment.rect.height * .2) && !/\s$/.test(text)) text += ' ';
+      else if (segment.rect.left - previous.rect.right > Math.max(2, segment.rect.height * .2) &&
+        !/\s$/.test(text) && !(/[\u3400-\u9fff]$/.test(text) && /^[\u3400-\u9fff]/.test(segment.text.slice(segment.start)))) text += ' ';
     }
     text += segment.text.slice(segment.start, segment.end);
     previous = segment;

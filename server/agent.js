@@ -1,6 +1,7 @@
 import { pageText, pageImage } from './documents.js';
 import net from 'node:net';
 import { modelDispatcher, publicModelDispatcher } from './model-network.js';
+import { generationInstruction, normalizeAiAnswer, validateAiGuidance, validateAiOutline } from '../src/aiNoteOutline.js';
 
 export function normalizeEndpoint(value) {
   const url = new URL(value);
@@ -57,12 +58,12 @@ async function modelServiceError(response, key) {
   return new Error(`${status === 401 || status === 403 || status === 402 || status === 429 ? fallback : `模型服务返回错误 ${status}`}：${detail}`);
 }
 
-export async function callModel({ endpoint, key, model, page, text, image, signal, test = false }) {
+export async function callModel({ endpoint, key, model, page, text, image, outline, guidance = '', signal, test = false }) {
   const url = normalizeEndpoint(endpoint);
   if (!key || !model) throw new Error('请填写模型名称和 API 密钥');
   const instruction = test
     ? '这是格式测试。只返回合法 JSON 对象：{"summary":"连接正常","concepts":[],"important":[],"cautions":[],"formula":[],"quiz":[]}。不要解释或代码块。'
-    : `你是学习笔记整理助手。仅依据提供的第 ${page} 页资料，返回一个合法 JSON 对象，不要代码块或额外说明。字段：summary 字符串；concepts、important、cautions、formula、quiz 为字符串数组。JSON 字符串中的 LaTeX 反斜杠必须按 JSON 规则转义。formula 中每条可确认的数学公式用 LaTeX 的 $...$ 包裹，函数名用 \\operatorname{}，乘号用 \\times；公式后的中文说明写在 $...$ 外。仅有文字说明时保留文字，不猜测缺失的公式。资料不明确时说明待核对，不编造。`;
+    : generationInstruction(page, outline, guidance);
   const content = test ? '请返回最小笔记 JSON。' : [{ type: 'text', text: `第 ${page} 页提取文字：\n${text || '无可提取文字，请依据页面图片，并标注需核对。'}` }, ...(image ? [{ type: 'image_url', image_url: { url: image } }] : [])];
   let response;
   try {
@@ -80,16 +81,18 @@ export async function callModel({ endpoint, key, model, page, text, image, signa
   const answer = choice?.message?.content;
   if (typeof answer !== 'string') throw new Error('模型返回内容格式不兼容');
   const ai = parseNoteAnswer(answer, choice?.finish_reason, test);
-  if (!ai || typeof ai.summary !== 'string') throw new Error('模型返回的笔记缺少摘要');
-  if (test) return { ok: true };
-  for (const field of ['concepts', 'important', 'cautions', 'formula', 'quiz']) ai[field] = Array.isArray(ai[field]) ? ai[field].map(String) : [];
-  delete ai.evidence;
-  return ai;
+  if (test) {
+    if (typeof ai.summary !== 'string') throw new Error('模型已连接，但未按要求返回笔记格式');
+    return { ok: true };
+  }
+  return normalizeAiAnswer(ai, outline);
 }
 
-export async function generatePage({ docId, page, endpoint, key, model, vision, signal }) {
+export async function generatePage({ docId, page, endpoint, key, model, vision, outline, guidance = '', signal }) {
+  if (outline !== undefined) validateAiOutline(outline);
+  validateAiGuidance(guidance);
   const text = await pageText(docId, page);
   const image = vision ? await pageImage(docId, page) : null;
   if (!text && !image) throw new Error('此页没有可提取文字，请使用支持图片的模型');
-  return callModel({ endpoint, key, model, page, text, image, signal });
+  return callModel({ endpoint, key, model, page, text, image, outline, guidance, signal });
 }

@@ -1,10 +1,10 @@
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { pdfDocumentOptions } from './pdfAssets';
+import { generationInstruction, normalizeAiAnswer, validateAiGuidance, validateAiOutline } from './aiNoteOutline';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
-const expected = ['concepts', 'important', 'cautions', 'formula', 'quiz'];
 const maxResponse = 2_000_000;
 let nextRequest = 0;
 const requests = new Map();
@@ -85,13 +85,13 @@ function serviceError(status, body, key) {
   return new Error(detail ? `${fallback}：${detail}` : fallback);
 }
 
-export async function callOfflineModel({ endpoint, key, model, page, text, image, test = false }) {
+export async function callOfflineModel({ endpoint, key, model, page, text, image, outline, guidance = '', test = false }) {
   if (!modelOnline()) throw new Error('无法生成智能笔记，请联网');
   if (!key || !model) throw new Error('请填写模型名称和 API 密钥');
   const url = normalizeModelEndpoint(endpoint);
   const instruction = test
     ? '这是格式测试。只返回合法 JSON 对象：{"summary":"连接正常","concepts":[],"important":[],"cautions":[],"formula":[],"quiz":[]}。不要解释或代码块。'
-    : `你是学习笔记整理助手。仅依据提供的第 ${page} 页资料，返回一个合法 JSON 对象，不要代码块或额外说明。字段：summary 字符串；concepts、important、cautions、formula、quiz 为字符串数组。JSON 字符串中的 LaTeX 反斜杠必须按 JSON 规则转义。formula 中每条可确认的数学公式用 LaTeX 的 $...$ 包裹，函数名用 \\operatorname{}，乘号用 \\times；公式后的中文说明写在 $...$ 外。仅有文字说明时保留文字，不猜测缺失的公式。资料不明确时说明待核对，不编造。`;
+    : generationInstruction(page, outline, guidance);
   const content = test ? '请返回最小笔记 JSON。' : [{ type: 'text', text: `第 ${page} 页提取文字：\n${text || '无可提取文字，请依据页面图片，并标注需核对。'}` }, ...(image ? [{ type: 'image_url', image_url: { url: image } }] : [])];
   let response;
   try {
@@ -112,15 +112,17 @@ export async function callOfflineModel({ endpoint, key, model, page, text, image
   const choice = data.choices?.[0];
   if (typeof choice?.message?.content !== 'string') throw new Error('模型返回内容格式不兼容');
   const ai = parseAnswer(choice.message.content, choice.finish_reason, test);
-  if (typeof ai.summary !== 'string') throw new Error('模型返回的笔记缺少摘要');
-  if (test) return { ok: true };
-  for (const field of expected) ai[field] = Array.isArray(ai[field]) ? ai[field].map(String) : [];
-  delete ai.evidence;
-  return ai;
+  if (test) {
+    if (typeof ai.summary !== 'string') throw new Error('模型已连接，但未按要求返回笔记格式');
+    return { ok: true };
+  }
+  return normalizeAiAnswer(ai, outline);
 }
 
-export async function generateOfflinePage({ docId, page, endpoint, key, model, vision }, loadPdf) {
+export async function generateOfflinePage({ docId, page, endpoint, key, model, vision, outline, guidance = '' }, loadPdf) {
   if (!modelOnline()) throw new Error('无法生成智能笔记，请联网');
+  if (outline !== undefined) validateAiOutline(outline);
+  validateAiGuidance(guidance);
   const loading = pdfjs.getDocument({ data: await loadPdf(docId), ...pdfDocumentOptions });
   let text;
   let image;
@@ -140,5 +142,5 @@ export async function generateOfflinePage({ docId, page, endpoint, key, model, v
     }
   } finally { await loading.destroy(); }
   if (!text && !image) throw new Error('此页没有可提取文字，请使用支持图片的模型');
-  return callOfflineModel({ endpoint, key, model, page, text, image });
+  return callOfflineModel({ endpoint, key, model, page, text, image, outline, guidance });
 }
