@@ -8,13 +8,14 @@
 
 | 使用方式 | 下载或打开方式 | 当前支持的资料 |
 | --- | --- | --- |
-| Windows 电脑 | 下载 [Windows 预览安装包 0.1.3](https://github.com/kaituozher11-png/yuan-notes/releases/download/preview-2026-11-21/YuanNotes-Windows-Setup-0.1.3.exe)，运行安装后从开始菜单打开“源笔记” | PDF、PPT/PPTX、Word/DOCX；文档预览需安装转换工具 |
-| Android 手机或平板 | 下载 [Android 离线测试 APK 0.2.4](https://github.com/kaituozher11-png/yuan-notes/releases/download/preview-2026-11-21/YuanNotes-Android-offline-0.2.4.apk)，在设备上打开并安装 | 可直接导入 PDF，最大 100 MB；Word/PPT 请先转为 PDF |
+| Windows 电脑 | 下载 [Windows 预览安装包 0.1.4](https://github.com/kaituozher11-png/yuan-notes/releases/download/preview-2026-11-23/YuanNotes-Windows-Setup-0.1.4.exe)，运行安装后从开始菜单打开“源笔记” | PDF、PPT/PPTX、Word/DOCX；文档预览需安装转换工具 |
+| Android 手机或平板 | 下载 [Android 离线测试 APK 0.2.5](https://github.com/kaituozher11-png/yuan-notes/releases/download/preview-2026-11-23/YuanNotes-Android-offline-0.2.5.apk)，在设备上打开并安装 | 可直接导入 PDF，最大 100 MB；Word/PPT 请先转为 PDF |
 | 本机网页版 | 按下方“从源码运行”在自己的电脑启动 | PDF、PPT/PPTX、Word/DOCX；需安装转换工具 |
 
 **目前没有可直接打开的公共网址，也没有 iOS 安装包。** GitHub 是源代码和下载页面，网页版需要在自己的电脑上运行。Windows 安装包未签名，首次安装可能出现系统来源提示；Android APK 是测试版，不是应用商店版本。
 
 上表中的预览安装包包含自定义智能笔记标题和 PDF 文字选择修复。升级前请先备份资料库；Android 设备请直接覆盖安装，避免卸载后丢失本地资料。
+Windows 0.1.4 和 Android 0.2.5 已加入批量导入与资料文件夹功能，可直接在导入窗口新建并选择文件夹。
 
 Windows 预览版没有内置文档转换工具。阅读 PDF 需要系统能运行 `pdfinfo`；提取文字和生成页面图片还需要 `pdftotext`、`pdftoppm`。导入 PPT 需要 LibreOffice，导入 Word 需要 LibreOffice 或本机 Microsoft Word。安装步骤和界面说明见[图文安装与使用指南](docs/使用指南.md)。
 
@@ -28,7 +29,7 @@ Windows 预览版没有内置文档转换工具。阅读 PDF 需要系统能运�
 
 ## 主要功能
 
-- **资料阅读**：翻页、缩放、选择文字、复制文字，按课程和关键词查找资料。
+- **资料阅读**：可一次导入多个文件，新建文件夹并在文件夹内导入或移动资料；翻页、缩放、选择文字、复制文字，按课程和关键词查找资料。
 - **个人笔记**：同一编辑区可组合文字、公式、图片；另有手写区与独立思维导图，可添加补充页和自定义模板。
 - **原文关联**：把笔记关联到原文页、选中文字或框选区域；关联位置可附文字、公式或图片批注。
 - **原文标记**：画笔、荧光笔、橡皮擦和便利贴；便利贴可移动，也可隐藏为小标记。

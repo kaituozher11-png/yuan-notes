@@ -2,6 +2,7 @@ package com.yingxing.notes.test;
 
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.net.ConnectivityManager;
@@ -94,7 +95,9 @@ public class OfflineActivity extends Activity {
                 if (fileCallback != null) fileCallback.onReceiveValue(null);
                 fileCallback = callback;
                 try {
-                    startActivityForResult(params.createIntent(), FILE_REQUEST);
+                    Intent intent = params.createIntent();
+                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
+                    startActivityForResult(intent, FILE_REQUEST);
                     return true;
                 } catch (ActivityNotFoundException error) {
                     fileCallback = null;
@@ -287,8 +290,21 @@ public class OfflineActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == FILE_REQUEST && fileCallback != null) {
-            fileCallback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
+            android.webkit.ValueCallback<Uri[]> callback = fileCallback;
             fileCallback = null;
+            Uri[] files = null;
+            if (resultCode == RESULT_OK && data != null) {
+                ClipData selected = data.getClipData();
+                if (selected != null && selected.getItemCount() > 0) {
+                    files = new Uri[selected.getItemCount()];
+                    for (int index = 0; index < selected.getItemCount(); index++) {
+                        files[index] = selected.getItemAt(index).getUri();
+                    }
+                } else if (data.getData() != null) {
+                    files = new Uri[] { data.getData() };
+                }
+            }
+            callback.onReceiveValue(files);
         }
     }
 

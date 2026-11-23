@@ -3,10 +3,11 @@ import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { callOfflineModel, generateOfflinePage } from './offlineModel';
 import { pdfDocumentOptions } from './pdfAssets';
+import { createFolder, folderName, folderTarget } from './libraryFolders';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
-const emptyState = () => ({ docs: [], notes: [], templates: [] });
+const emptyState = () => ({ docs: [], notes: [], templates: [], folders: [] });
 let database;
 let writeQueue = Promise.resolve();
 const previews = new Map();
@@ -52,6 +53,7 @@ async function state() {
   saved.docs ||= [];
   saved.notes ||= [];
   saved.templates ||= [];
+  saved.folders ||= [];
   return saved;
 }
 
@@ -80,7 +82,7 @@ async function readPageCount(source) {
   finally { await loading.destroy(); }
 }
 
-async function importPdf(file, course) {
+async function importPdf(file, course, folderId) {
   if (!file) throw new Error('请选择文件');
   if (!/\.pdf$/i.test(file.name)) throw new Error('离线版目前仅支持 PDF；请先将 Word 或 PPT 转为 PDF');
   if (file.size < 8 || file.size > 100 * 1024 * 1024) throw new Error('PDF 文件大小须在 100 MB 以内');
@@ -105,10 +107,10 @@ async function importPdf(file, course) {
   const now = new Date().toISOString();
   const doc = {
     id: crypto.randomUUID(), name: file.name.replace(/\.pdf$/i, '').slice(0, 150), filename: file.name,
-    type: 'PDF', pages, course: String(course || '').trim().slice(0, 100), tags: [], deleted: false,
+    type: 'PDF', pages, course: String(course || '').trim().slice(0, 100), folderId: null, tags: [], deleted: false,
     createdAt: now, updatedAt: now,
   };
-  return change((current) => { current.docs.unshift(doc); return doc; }, [[doc.id, new Blob([buffer], { type: 'application/pdf' })]]);
+  return change((current) => { doc.folderId = folderTarget(current, folderId); current.docs.unshift(doc); return doc; }, [[doc.id, new Blob([buffer], { type: 'application/pdf' })]]);
 }
 
 function imageAsDataUrl(file) {
@@ -130,13 +132,30 @@ export async function offlineApi(path, options = {}) {
   const method = (options.method || 'GET').toUpperCase();
   if (path === '/auth/session' && method === 'GET') return { mode: 'local', user: null };
   if (path === '/state' && method === 'GET') { await writeQueue.catch(() => {}); return state(); }
-  if (path === '/docs' && method === 'POST') return importPdf(options.body.get('file'), options.body.get('course'));
+  if (path === '/docs' && method === 'POST') return importPdf(options.body.get('file'), options.body.get('course'), options.body.get('folderId'));
+  if (path === '/folders' && method === 'POST') return change((current) => createFolder(current, body(options).name));
+  let match = path.match(/^\/folders\/([^/]+)$/);
+  if (match && method === 'PATCH') return change((current) => {
+    const folder = current.folders.find((item) => item.id === match[1]);
+    if (!folder) throw new Error('文件夹不存在');
+    const name = folderName(body(options).name);
+    if (current.folders.some((item) => item.id !== folder.id && item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error('文件夹名称已存在');
+    folder.name = name;
+    return folder;
+  });
+  if (match && method === 'DELETE') return change((current) => {
+    if (!current.folders.some((item) => item.id === match[1])) throw new Error('文件夹不存在');
+    if (current.docs.some((doc) => !doc.deleted && doc.folderId === match[1])) throw new Error('请先移出文件夹中的资料');
+    for (const doc of current.docs) if (doc.folderId === match[1]) doc.folderId = null;
+    current.folders = current.folders.filter((folder) => folder.id !== match[1]);
+    return { ok: true };
+  });
   if (path === '/images' && method === 'POST') {
     const image = options.body.get('image');
     if (!image || !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(image.type) || image.size > 5 * 1024 * 1024) throw new Error('仅支持 5 MB 以内的 PNG、JPEG、GIF 或 WebP 图片');
     return { url: await imageAsDataUrl(image) };
   }
-  let match = path.match(/^\/docs\/([^/]+)\/pages\/(\d+)\/markup$/);
+  match = path.match(/^\/docs\/([^/]+)\/pages\/(\d+)\/markup$/);
   if (match && method === 'PUT') return change((current) => {
     const doc = currentDoc(current, match[1]);
     if (!doc || Number(match[2]) < 1 || Number(match[2]) > doc.pages) throw new Error('原文页不存在');
@@ -153,6 +172,7 @@ export async function offlineApi(path, options = {}) {
     if (typeof fields.deleted === 'boolean') doc.deleted = fields.deleted;
     if (typeof fields.name === 'string') doc.name = fields.name.trim().slice(0, 150) || doc.name;
     if (typeof fields.course === 'string') doc.course = fields.course.trim().slice(0, 100);
+    if ('folderId' in fields) doc.folderId = folderTarget(current, fields.folderId);
     doc.updatedAt = new Date().toISOString();
     return doc;
   });
@@ -296,7 +316,8 @@ export async function offlineRestore(file) {
   });
   if (!archive['state.json']) throw new Error('备份中缺少 state.json');
   const restored = JSON.parse(strFromU8(archive['state.json']));
-  if (!Array.isArray(restored.docs) || !Array.isArray(restored.notes) || !Array.isArray(restored.templates)) throw new Error('备份数据格式无效');
+  if (!Array.isArray(restored.docs) || !Array.isArray(restored.notes) || !Array.isArray(restored.templates) ||
+      (restored.folders !== undefined && !Array.isArray(restored.folders))) throw new Error('备份数据格式无效');
   if (restored.docs.length > 2000 || restored.notes.length > 100000 || restored.templates.length > 10000) throw new Error('备份内容超过支持范围');
   const pdfs = restored.docs.map((doc) => {
     if (!/^[0-9a-f-]{36}$/.test(doc.id)) throw new Error('备份中的资料编号无效');

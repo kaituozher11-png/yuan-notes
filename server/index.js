@@ -11,6 +11,7 @@ import { importDocument, pdfPath, pageText } from './documents.js';
 import { callModel, generatePage } from './agent.js';
 import { validateMarkup } from './markup.js';
 import { createAuth } from './auth.js';
+import { createFolder, folderName, folderTarget } from '../src/libraryFolders.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -129,6 +130,33 @@ app.delete('/api/auth/account', async (req, res) => {
   } catch (err) { error(res, err); }
 });
 app.get('/api/state', async (_req, res) => res.json(await getState()));
+app.post('/api/folders', async (req, res) => {
+  try { res.json(await mutate((state) => createFolder(state, req.body.name))); }
+  catch (err) { error(res, err); }
+});
+app.patch('/api/folders/:id', async (req, res) => {
+  try {
+    res.json(await mutate((state) => {
+      const folder = state.folders.find((item) => item.id === req.params.id);
+      if (!folder) throw new Error('文件夹不存在');
+      const name = folderName(req.body.name);
+      if (state.folders.some((item) => item.id !== folder.id && item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error('文件夹名称已存在');
+      folder.name = name;
+      return folder;
+    }));
+  } catch (err) { error(res, err); }
+});
+app.delete('/api/folders/:id', async (req, res) => {
+  try {
+    res.json(await mutate((state) => {
+      if (!state.folders.some((item) => item.id === req.params.id)) throw new Error('文件夹不存在');
+      if (state.docs.some((doc) => !doc.deleted && doc.folderId === req.params.id)) throw new Error('请先移出文件夹中的资料');
+      for (const doc of state.docs) if (doc.folderId === req.params.id) doc.folderId = null;
+      state.folders = state.folders.filter((folder) => folder.id !== req.params.id);
+      return { ok: true };
+    }));
+  } catch (err) { error(res, err); }
+});
 app.post('/api/images', imageUpload.single('image'), async (req, res) => {
   try {
     const file = req.file;
@@ -169,9 +197,10 @@ app.get('/api/backup', async (_req, res) => {
 app.post('/api/docs', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) throw new Error('请选择文件');
+    const folderId = folderTarget(await getState(), req.body.folderId);
     const doc = await importDocument(req.file);
     doc.course = String(req.body.course || '').trim().slice(0, 100);
-    await mutate((s) => s.docs.unshift(doc));
+    await mutate((s) => { doc.folderId = folderTarget(s, folderId); s.docs.unshift(doc); });
     res.json(doc);
   } catch (err) { error(res, err); }
 });
@@ -209,6 +238,7 @@ app.patch('/api/docs/:id', async (req, res) => {
       if (typeof req.body.deleted === 'boolean') item.deleted = req.body.deleted;
       if (typeof req.body.name === 'string') item.name = req.body.name.trim().slice(0, 150) || item.name;
       if (typeof req.body.course === 'string') item.course = req.body.course.trim().slice(0, 100);
+      if ('folderId' in req.body) item.folderId = folderTarget(s, req.body.folderId);
       item.updatedAt = new Date().toISOString(); return item;
     }); res.json(doc);
   } catch (err) { error(res, err); }

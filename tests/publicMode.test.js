@@ -95,6 +95,14 @@ test('public mode keeps accounts, files, notes and sessions separate', async (t)
   const imported = await request('/api/docs', { cookie: a.cookie, method: 'POST', body: form });
   assert.equal(imported.status, 200);
   const docId = imported.body.id;
+  const folderA = await request('/api/folders', { cookie: a.cookie, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: '论文' }) });
+  const folderB = await request('/api/folders', { cookie: b.cookie, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: '论文' }) });
+  assert.equal(folderA.status, 200);
+  assert.equal(folderB.status, 200);
+  assert.notEqual(folderA.body.id, folderB.body.id);
+  assert.equal((await request(`/api/docs/${docId}`, { cookie: a.cookie, method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folderId: folderB.body.id }) })).status, 400);
+  assert.equal((await request(`/api/docs/${docId}`, { cookie: a.cookie, method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folderId: folderA.body.id }) })).status, 200);
+  assert.equal((await request('/api/state', { cookie: b.cookie })).body.folders.length, 1);
   assert.equal((await request('/api/state', { cookie: a.cookie })).body.docs.length, 1);
   assert.equal((await request('/api/state', { cookie: b.cookie })).body.docs.length, 0);
   const documentResponse = await fetch(`${origin}/api/docs/${docId}/pdf`, { headers: { Cookie: b.cookie } });

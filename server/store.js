@@ -21,9 +21,9 @@ async function loadState(dir) {
   try { state = JSON.parse(await fs.readFile(path.join(dir, 'state.json'), 'utf8')); }
   catch (error) {
     if (error.code !== 'ENOENT') throw error;
-    state = { docs: [], notes: [], templates: [] };
+    state = { docs: [], notes: [], templates: [], folders: [] };
   }
-  state.docs ||= []; state.notes ||= []; state.templates ||= [];
+  state.docs ||= []; state.notes ||= []; state.templates ||= []; state.folders ||= [];
   const orderByPage = new Map();
   for (const note of state.notes) {
     const key = `${note.docId}:${note.page}`;

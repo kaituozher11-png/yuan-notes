@@ -484,7 +484,7 @@ function NoteEditor({ note, update, addLink, onJump, onEditRegion, onRemoveLink,
 }
 
 export default function App({ account, onAccount }) {
-  const [data, setData] = useState({ docs: [], notes: [], templates: [] });
+  const [data, setData] = useState({ docs: [], notes: [], templates: [], folders: [] });
   const [saveStatus, setSaveStatus] = useState({});
   const [screen, setScreen] = useState("library");
   const [docId, setDocId] = useState(null);
@@ -504,6 +504,10 @@ export default function App({ account, onAccount }) {
   const [zoom, setZoom] = useState(() => window.innerWidth <= 600 ? 1.6 : 1);
   const [query, setQuery] = useState("");
   const [libraryFilter, setLibraryFilter] = useState("all");
+  const [folderId, setFolderId] = useState(null);
+  const [importFolderId, setImportFolderId] = useState(null);
+  const [folderDraft, setFolderDraft] = useState('');
+  const [importProgress, setImportProgress] = useState(null);
   const [sourcePage, setSourcePage] = useState({ text: '', blocks: [] });
   const [highlight, setHighlight] = useState("");
   const [highlightRect, setHighlightRect] = useState(null);
@@ -526,7 +530,7 @@ export default function App({ account, onAccount }) {
   });
   const [dialog, setDialog] = useState(null);
   const [toast, setToast] = useState("");
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [course, setCourse] = useState("");
   const [busy, setBusy] = useState(false);
   const [models, setModels] = useState(() => loadModels(account));
@@ -554,6 +558,7 @@ export default function App({ account, onAccount }) {
   const noteResize = useRef(null);
   const markupSaves = useRef(new Map());
   const restoreInput = useRef(null);
+  const importInput = useRef(null);
 
   useEffect(() => {
     api("/state")
@@ -648,9 +653,12 @@ export default function App({ account, onAccount }) {
     pageNotes[0];
   const activeModel = models.find((x) => x.id === modelId) || models[0];
   const selectedKey = activeModel && keys[activeModel.id];
+  const folders = data.folders || [];
+  const currentFolder = folders.find((item) => item.id === folderId);
   const filteredDocs = useMemo(
     () => data.docs.filter((x) => {
       if (x.deleted) return false;
+      if (folderId ? x.folderId !== folderId : !query.trim() && x.folderId) return false;
       const notes = data.notes.filter((n) => n.docId === x.id && !n.deleted);
       if (libraryFilter === 'ungenerated' && notes.filter((n) => n.kind === 'ai').length >= x.pages) return false;
       if (libraryFilter === 'mine' && !notes.some((n) => n.kind === 'user' || n.blocks?.length)) return false;
@@ -658,7 +666,7 @@ export default function App({ account, onAccount }) {
       if (!needle) return true;
       return `${x.name} ${x.course} ${x.filename}`.toLowerCase().includes(needle) || notes.some((n) => noteSearchText(n).includes(needle));
     }),
-    [data.docs, data.notes, query, libraryFilter],
+    [data.docs, data.notes, query, libraryFilter, folderId],
   );
 
   async function reload() {
@@ -830,24 +838,77 @@ export default function App({ account, onAccount }) {
   }
   async function importFile(event) {
     event.preventDefault();
-    if (!file) return notify("请选择资料文件");
+    if (!files.length) return notify("请选择资料文件");
     setBusy(true);
+    const failures = [];
+    let completed = 0;
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("course", course);
-      const made = await api("/docs", { method: "POST", body: form });
+      for (const [index, file] of files.entries()) {
+        setImportProgress({ done: index, total: files.length, name: file.name });
+        try {
+          const form = new FormData();
+          form.append('file', file);
+          form.append('course', course);
+          form.append('folderId', importFolderId || '');
+          await api('/docs', { method: 'POST', body: form });
+          completed++;
+        } catch (error) { failures.push(`${file.name}：${error.message}`); }
+      }
       await reload();
-      setDialog(null);
-      setFile(null);
-      setCourse("");
-      openDoc(made);
-      notify(`已导入 ${made.pages} 页`);
+      if (!failures.length) {
+        setDialog(null);
+        setFiles([]);
+        if (importInput.current) importInput.current.value = '';
+        setCourse('');
+        setFolderId(importFolderId);
+        notify(`已导入 ${completed} 份资料`);
+      } else {
+        setImportProgress({ done: files.length, total: files.length, failures });
+        setFiles([]);
+        if (importInput.current) importInput.current.value = '';
+        notify(`成功 ${completed} 份，失败 ${failures.length} 份`);
+      }
     } catch (e) {
       notify(`导入失败：${e.message}`);
     } finally {
       setBusy(false);
     }
+  }
+  function openImport() {
+    setFiles([]);
+    setImportProgress(null);
+    setImportFolderId(folderId);
+    setFolderDraft('');
+    setDialog('import');
+  }
+  async function addFolder() {
+    try {
+      const folder = await api('/folders', json('POST', { name: folderDraft }));
+      await reload();
+      setFolderDraft('');
+      if (dialog === 'import') setImportFolderId(folder.id);
+      else setFolderId(folder.id);
+      notify(`已新建文件夹“${folder.name}”`);
+      return true;
+    } catch (error) { notify(error.message); return false; }
+  }
+  async function moveDoc(item, targetId) {
+    try {
+      await api(`/docs/${item.id}`, json('PATCH', { folderId: targetId || null }));
+      await reload();
+      notify(`已移动“${item.name}”`);
+    } catch (error) { notify(error.message); }
+  }
+  async function renameFolder() {
+    const name = prompt('修改文件夹名称', currentFolder?.name || '');
+    if (name === null) return;
+    try { await api(`/folders/${folderId}`, json('PATCH', { name })); await reload(); }
+    catch (error) { notify(error.message); }
+  }
+  async function removeFolder() {
+    if (!currentFolder || !confirm(`删除空文件夹“${currentFolder.name}”？`)) return;
+    try { await api(`/folders/${folderId}`, { method: 'DELETE' }); setFolderId(null); await reload(); }
+    catch (error) { notify(error.message); }
   }
   async function patchDoc(item, changes) {
     try {
@@ -1170,12 +1231,16 @@ export default function App({ account, onAccount }) {
                 <h1>我的资料</h1>
                 <p>从上次阅读的地方，继续整理你的知识。</p>
               </div>
-              <button
-                className="primary-button"
-                onClick={() => setDialog("import")}
-              >
-                <Upload size={17} /> 导入资料
-              </button>
+              <div className="library-head-actions">
+                <button className="secondary-button" onClick={() => { setFolderDraft(''); setDialog('folder'); }}><Plus size={17} /> 新建文件夹</button>
+                <button className="primary-button" onClick={openImport}><Upload size={17} /> 导入资料</button>
+              </div>
+            </div>
+            <div className="library-location">
+              <button type="button" className={!folderId ? 'active' : ''} onClick={() => { setFolderId(null); setQuery(''); }}>全部文件夹</button>
+              {currentFolder && <><ChevronRight size={15} /><strong>{currentFolder.name}</strong>
+                <button type="button" className="folder-command" onClick={renameFolder}>重命名</button>
+                <button type="button" className="folder-command" onClick={removeFolder}>删除文件夹</button></>}
             </div>
             <div className="library-toolbar">
               <div className="search-box">
@@ -1188,12 +1253,17 @@ export default function App({ account, onAccount }) {
                 />
               </div>
               <select className="library-filter" aria-label="筛选资料" value={libraryFilter} onChange={(e) => setLibraryFilter(e.target.value)}><option value="all">全部资料</option><option value="ungenerated">未生成完</option><option value="mine">我的笔记</option></select>
-              <span>{filteredDocs.length} 份资料</span>
+              <span>{!folderId && !query.trim() && libraryFilter === 'all' ? data.docs.filter((item) => !item.deleted).length : filteredDocs.length} 份资料</span>
               {data.docs.length > 0 && (window.YuanOfflineApp
                 ? <button className="backup-link" type="button" onClick={() => offlineBackup().catch((error) => notify(`备份失败：${error.message}`))}><Download size={15}/> 备份资料库</button>
                 : <a className="backup-link" href="/api/backup" download><Download size={15}/> 备份资料库</a>)}
-              {window.YuanOfflineApp && <><button className="backup-link" type="button" onClick={() => restoreInput.current?.click()}><Upload size={15}/> 恢复备份</button><input ref={restoreInput} type="file" accept=".zip,application/zip" hidden onChange={async (event) => { const backup = event.target.files?.[0]; event.target.value = ''; if (!backup || !confirm('恢复备份会替换手机内现有的资料和笔记。请先备份当前资料，确定继续？')) return; try { const count = await offlineRestore(backup); await reload(); setScreen('library'); setDocId(null); notify(`已恢复 ${count} 份资料`); } catch (error) { notify(`恢复失败：${error.message}`); } }}/></>}
+              {window.YuanOfflineApp && <><button className="backup-link" type="button" onClick={() => restoreInput.current?.click()}><Upload size={15}/> 恢复备份</button><input ref={restoreInput} type="file" accept=".zip,application/zip" hidden onChange={async (event) => { const backup = event.target.files?.[0]; event.target.value = ''; if (!backup || !confirm('恢复备份会替换手机内现有的资料和笔记。请先备份当前资料，确定继续？')) return; try { const count = await offlineRestore(backup); await reload(); setScreen('library'); setDocId(null); setFolderId(null); notify(`已恢复 ${count} 份资料`); } catch (error) { notify(`恢复失败：${error.message}`); } }}/></>}
             </div>
+            {!folderId && !query.trim() && folders.length > 0 && <div className="folder-list">
+              {folders.map((folder) => <button key={folder.id} className="folder-row" onClick={() => setFolderId(folder.id)}>
+                <FolderOpen size={21} /><span>{folder.name}</span><small>{data.docs.filter((doc) => !doc.deleted && doc.folderId === folder.id).length} 份资料</small><ChevronRight size={17} />
+              </button>)}
+            </div>}
             {filteredDocs.length ? (
               <div className="doc-list">
                 {filteredDocs.map((item) => {
@@ -1233,6 +1303,10 @@ export default function App({ account, onAccount }) {
                         <time>{stamp(item.updatedAt)}</time>
                         <ChevronRight size={18} />
                       </button>
+                      <select className="doc-move" aria-label={`移动资料：${item.name}`} title="移动到文件夹" value={item.folderId || ''} onChange={(event) => moveDoc(item, event.target.value)}>
+                        <option value="">根目录</option>
+                        {folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+                      </select>
                       <button
                         className="doc-row-delete"
                         aria-label={`删除资料：${item.name}`}
@@ -1248,13 +1322,13 @@ export default function App({ account, onAccount }) {
                   );
                 })}
               </div>
-            ) : (
+            ) : (!folders.length || folderId || query.trim() || libraryFilter !== 'all') && (
               <div className="library-empty">
                 <div className="empty-art">
                   <FileText size={56} />
                   <span>✦</span>
                 </div>
-                <h2>{query ? "没有匹配的资料" : "从一份资料开始"}</h2>
+                <h2>{query ? "没有匹配的资料" : currentFolder ? "文件夹中还没有资料" : "从一份资料开始"}</h2>
                 <p>
                   {query
                     ? "试试其他关键词。"
@@ -1263,7 +1337,7 @@ export default function App({ account, onAccount }) {
                 {!query && (
                   <button
                     className="primary-button"
-                    onClick={() => setDialog("import")}
+                    onClick={openImport}
                   >
                     <Upload size={16} /> 导入资料
                   </button>
@@ -1928,6 +2002,8 @@ export default function App({ account, onAccount }) {
               <h2>
                 {dialog === "import"
                   ? "导入学习资料"
+                  : dialog === 'folder'
+                    ? '新建文件夹'
                   : dialog === "newNote"
                     ? "新建笔记页"
                     : "生成学习笔记"}
@@ -1944,18 +2020,36 @@ export default function App({ account, onAccount }) {
                 <X size={19} />
               </IconButton>
             </div>
+            {dialog === 'folder' && <form onSubmit={(event) => { event.preventDefault(); addFolder().then((created) => { if (created) setDialog(null); }); }}>
+              <label>文件夹名称<input autoFocus maxLength={80} value={folderDraft} onChange={(event) => setFolderDraft(event.target.value)} placeholder="例如：信号处理" /></label>
+              <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setDialog(null)}>取消</button><button type="submit" className="primary-button">新建文件夹</button></div>
+            </form>}
             {dialog === "import" && (
               <form onSubmit={importFile}>
                 <label className="file-drop">
                   <Upload size={30} />
-                  <strong>{file?.name || (window.YuanOfflineApp ? '选择 PDF 文件' : '选择 PDF、PPT 或 Word 文件')}</strong>
-                  <span>{window.YuanOfflineApp ? '离线导入 PDF，最大 100 MB；Word/PPT 请先转成 PDF' : '最大 100 MB；PPT 和 Word 将转换为 PDF 预览'}</span>
+                  <strong>{files.length ? `已选择 ${files.length} 个文件` : (window.YuanOfflineApp ? '选择 PDF 文件' : '选择 PDF、PPT 或 Word 文件')}</strong>
+                  <span>{window.YuanOfflineApp ? '每个 PDF 最大 100 MB；Word/PPT 请先转成 PDF' : '每个文件最大 100 MB；PPT 和 Word 将转换为 PDF 预览'}</span>
                   <input
+                    ref={importInput}
                     type="file"
+                    multiple
+                    disabled={busy}
                     accept={window.YuanOfflineApp ? '.pdf,application/pdf' : '.pdf,.ppt,.pptx,.doc,.docx'}
-                    onChange={(e) => setFile(e.target.files?.[0])}
+                    onChange={(e) => { setFiles([...e.target.files]); setImportProgress(null); }}
                   />
                 </label>
+                {files.length > 0 && <div className="import-files">{files.map((item, index) => <span key={`${item.name}-${index}`}>{item.name}</span>)}</div>}
+                <label>导入到文件夹
+                  <select value={importFolderId || ''} disabled={busy} onChange={(event) => setImportFolderId(event.target.value || null)}>
+                    <option value="">根目录</option>
+                    {folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+                  </select>
+                </label>
+                <div className="import-new-folder">
+                  <input aria-label="新文件夹名称" value={folderDraft} disabled={busy} maxLength={80} onChange={(event) => setFolderDraft(event.target.value)} placeholder="新文件夹名称" />
+                  <button type="button" className="secondary-button" disabled={busy || !folderDraft.trim()} onClick={addFolder}><Plus size={15} /> 新建文件夹</button>
+                </div>
                 <label>
                   课程名称（可选）
                   <input
@@ -1964,20 +2058,22 @@ export default function App({ account, onAccount }) {
                     placeholder="例如：高等数学"
                   />
                 </label>
+                {importProgress && <div className="import-progress" role="status">{importProgress.failures ? <><strong>导入完成，以下文件失败：</strong>{importProgress.failures.map((message, index) => <p key={index}>{message}</p>)}</> : `正在导入 ${importProgress.done + 1}/${importProgress.total}：${importProgress.name}`}</div>}
                 <div className="modal-actions">
                   <button
                     className="secondary-button"
                     type="button"
+                    disabled={busy}
                     onClick={() => setDialog(null)}
                   >
                     取消
                   </button>
                   <button
                     className="primary-button"
-                    disabled={busy}
+                    disabled={busy || !files.length}
                     type="submit"
                   >
-                    {busy ? "正在处理…" : "导入资料"}
+                    {busy ? "正在处理…" : files.length > 1 ? `导入 ${files.length} 份资料` : "导入资料"}
                   </button>
                 </div>
               </form>
