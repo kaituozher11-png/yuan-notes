@@ -273,7 +273,7 @@ function NoteEditor({ note, update, addLink, onJump, onEditRegion, onRemoveLink,
                   {editingAi ? "完成修改" : "修改内容"}
                 </button>
               </div>
-              {aiNoteSections(note.ai).map(({ key, title, value, kind, index }) => {
+              {aiNoteSections(note.ai).map(({ key, title, value, sourceValue, kind, index }) => {
                 return (
                   <section className="ai-section" key={key}>
                     {editingAi && kind === 'custom' ? (
@@ -288,7 +288,7 @@ function NoteEditor({ note, update, addLink, onJump, onEditRegion, onRemoveLink,
                     {editingAi ? (
                       <textarea
                         aria-label={title}
-                        value={Array.isArray(value) ? value.join("\n") : value}
+                        value={Array.isArray(sourceValue) ? sourceValue.join("\n") : sourceValue}
                         onChange={(e) =>
                           patch({
                             ai: kind === 'custom'

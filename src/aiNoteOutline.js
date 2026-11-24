@@ -26,15 +26,47 @@ export function validateAiOutline(value) {
   return titles;
 }
 
+// Remove only a matching title at the start; keep internal headings and formulas.
+export function withoutRepeatedTitle(value, title) {
+  if (!title) return value;
+  if (Array.isArray(value)) {
+    const result = [...value];
+    while (result.length) {
+      const cleaned = withoutRepeatedTitle(result[0], title);
+      if (cleaned === result[0]) break;
+      if (cleaned.trim()) { result[0] = cleaned; break; }
+      result.shift();
+    }
+    return result;
+  }
+  if (typeof value !== 'string') return value;
+  const lines = value.split(/\r?\n/);
+  let start = 0;
+  let removed = false;
+  while (start < lines.length) {
+    let index = start;
+    while (index < lines.length && !lines[index].trim()) index++;
+    if (index === lines.length) break;
+    let heading = lines[index].trim().replace(/^#{1,6}\s+/, '').replace(/\s+#+$/, '');
+    heading = heading.replace(/^(\*\*|__)(.+)\1$/, '$2').trim().replace(/[：:]$/, '').trim();
+    if (heading !== title.trim().replace(/[：:]$/, '').trim()) break;
+    start = index + 1;
+    if (/^\s*(?:=+|-+)\s*$/.test(lines[start] || '')) start++;
+    removed = true;
+  }
+  return removed ? lines.slice(start).join('\n').replace(/^(?:[ \t]*\n)+/, '') : value;
+}
+
 export function aiNoteSections(ai) {
   if (Array.isArray(ai?.sections)) return ai.sections.map((section, index) => ({
     key: `section-${index}`,
     title: String(section.title || ''),
-    value: String(section.content || ''),
+    value: withoutRepeatedTitle(String(section.content || ''), String(section.title || '')),
+    sourceValue: String(section.content || ''),
     kind: 'custom',
     index,
   }));
-  return legacyTitles.map(([key, title]) => ({ key, title, value: ai?.[key], kind: key }))
+  return legacyTitles.map(([key, title]) => ({ key, title, value: withoutRepeatedTitle(ai?.[key], title), sourceValue: ai?.[key], kind: key }))
     .filter((section) => section.value && (!Array.isArray(section.value) || section.value.length));
 }
 
@@ -49,7 +81,7 @@ export function generationInstruction(page, outline, guidance = '') {
   }
   const titles = validateAiOutline(outline);
   const request = validateAiGuidance(guidance);
-  return `你是学习笔记整理助手。仅依据提供的第 ${page} 页资料，按以下标题及顺序生成笔记：${JSON.stringify(titles)}。只返回合法 JSON 对象，不要代码块或额外说明。格式为 {"sections":[{"content":"该标题的笔记内容"}]}，sections 的数量必须与标题数量相同，按顺序逐项填写；不要增加其他标题。每项 content 为 Markdown 字符串，可使用列表；能确认的公式用 LaTeX 的 $...$ 包裹，JSON 字符串中的反斜杠按 JSON 规则转义。无法从本页确认的内容写“本页未涉及”或“待核对”，不要编造。${request ? `用户的补充生成要求：${request}。仅在原文支持时遵循。` : ''}`;
+  return `你是学习笔记整理助手。仅依据提供的第 ${page} 页资料，按以下标题及顺序生成笔记：${JSON.stringify(titles)}。只返回合法 JSON 对象，不要代码块或额外说明。格式为 {"sections":[{"content":"该标题的笔记内容"}]}，sections 的数量必须与标题数量相同，按顺序逐项填写；不要增加其他标题。每项 content 只写正文，界面会单独显示区块标题，不要在正文开头重复该区块标题。每项 content 为 Markdown 字符串，可使用列表；能确认的公式用 LaTeX 的 $...$ 包裹，JSON 字符串中的反斜杠按 JSON 规则转义。无法从本页确认的内容写“本页未涉及”或“待核对”，不要编造。${request ? `用户的补充生成要求：${request}。仅在原文支持时遵循。` : ''}`;
 }
 
 export function normalizeAiAnswer(ai, outline) {
@@ -66,5 +98,5 @@ export function normalizeAiAnswer(ai, outline) {
       ai.sections.some((section) => !section || typeof section.content !== 'string')) {
     throw new Error('模型未按所选标题返回完整笔记，请重试或更换模型');
   }
-  return { sections: titles.map((title, index) => ({ title, content: ai.sections[index].content })) };
+  return { sections: titles.map((title, index) => ({ title, content: withoutRepeatedTitle(ai.sections[index].content, title) })) };
 }
