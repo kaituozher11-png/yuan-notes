@@ -40,7 +40,7 @@ export function partsToRich(parts = []) {
     } else {
       flush();
       if (part.type === 'drawing') content.push({ type: 'noteDrawing', attrs: { strokes: part.strokes || [], height: part.height || null } });
-      if (part.type === 'mindmap') content.push({ type: 'noteMindMap', attrs: { nodes: part.nodes || [] } });
+      if (part.type === 'mindmap') content.push({ type: 'noteMindMap', attrs: { nodes: part.nodes || [], edges: part.edges, width: part.width, height: part.height } });
     }
   }
   flush();
@@ -84,7 +84,7 @@ export function freeNoteBlocks(blocks = []) {
       const item = content[index];
       if (item.type === 'noteMindMap') {
         flush();
-        result.push({ id: item.attrs?.id || `${block.id}-map-${index}`, type: 'mindmap', nodes: item.attrs?.nodes || [], edges: item.attrs?.edges });
+        result.push({ id: item.attrs?.id || `${block.id}-map-${index}`, type: 'mindmap', nodes: item.attrs?.nodes || [], edges: item.attrs?.edges, ...(item.attrs?.width ? { width: item.attrs.width } : {}), ...(item.attrs?.height ? { height: item.attrs.height } : {}) });
       } else {
         if (!pendingId) {
           pendingId = usedIds.has(block.id) ? `${block.id}-text-${index}` : block.id;

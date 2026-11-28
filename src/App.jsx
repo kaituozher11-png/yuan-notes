@@ -437,7 +437,7 @@ function NoteEditor({ note, update, addLink, onJump, onEditRegion, onRemoveLink,
           )}
           {block.type === "mindmap" && (
             <MindMap
-              value={{ nodes: block.nodes, edges: block.edges }}
+              value={block}
               onChange={(map) => note.kind === 'user' ? changeFreeBlock(block.id, map) : blockPatch(block.id, map)}
             />
           )}

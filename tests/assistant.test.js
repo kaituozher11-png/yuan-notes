@@ -189,6 +189,51 @@ test('assistant rejects invalid targets, cross-document links, arbitrary image U
   assert.equal(f.writes.length, 0);
 });
 
+test('assistant preserves expanded maps, node styles, arrows and supports automatic layout and dedicated export', async () => {
+  const f = fixture();
+  await f.execute('append_content', { noteId: 'note1', parts: [{ type: 'mindmap', width: 4000, height: 3000, nodes: [
+    { id: 'root', text: '大画布', x: 1800, y: 1800, shape: 'rectangle', width: 240, fontSize: 18, fill: '#ffeeaa', textColor: '#123456', color: '#abcdef', bold: true },
+    { id: 'other', text: '自由连线节点', x: 2400, y: 2100, shape: 'circle' },
+  ], edges: [{ id: 'line', from: 'root', to: 'other', text: '关系', arrow: true, dashed: true }] }] });
+  const block = f.state.notes[0].blocks.find(block => block.type === 'mindmap');
+  assert.equal(block.width, 4000); assert.equal(block.nodes[0].x, 1800); assert.equal(block.nodes[0].fontSize, 18); assert.equal(block.edges[0].arrow, true);
+  await f.execute('configure_mindmap', { noteId: 'note1', blockId: block.id, layout: 'down', expand: true });
+  const after = f.state.notes[0].blocks.find(item => item.id === block.id);
+  assert.ok(after.width >= 4800); assert.ok(after.height >= 3600); assert.equal(after.nodes[0].fill, '#ffeeaa');
+  await f.execute('export_mindmap', { noteId: 'note1', blockId: block.id, format: 'svg' }); assert.equal(f.downloads.at(-1)[0], 'mindmap');
+  await assert.rejects(f.execute('configure_mindmap', { noteId: 'note1', blockId: block.id, width: 40000 }));
+  await assert.rejects(f.execute('export_mindmap', { noteId: 'note1', blockId: block.id, format: 'exe' }));
+});
+
+test('assistant incrementally edits large maps without dropping untouched content, validates boundaries and refuses stale writes', async () => {
+  const f = fixture();
+  const nodes = Array.from({ length: 150 }, (_, i) => ({ id: `n${i}`, text: `节点${i}`, x: i * 180, y: 0, shape: 'rectangle', fill: '#abcdef' }));
+  const block = { id: 'map', type: 'mindmap', width: 30000, height: 900, nodes, edges: [{ id: 'e', from: 'n0', to: 'n1', text: '原连线', arrow: true }] };
+  f.state.notes[0].blocks.push(block);
+  await f.execute('edit_mindmap', { noteId: 'note1', blockId: 'map', nodes: [{ id: 'n1', text: '局部修改', fontSize: 20 }], edges: [{ id: 'e', text: '新连线', dashed: true }] });
+  let current = f.state.notes[0].blocks[1];
+  assert.equal(current.nodes.length, 150); assert.equal(current.nodes[1].fill, '#abcdef'); assert.equal(current.nodes[1].x, 180); assert.equal(current.nodes[1].y, 0); assert.equal(current.nodes[1].fontSize, 20);
+  assert.equal(current.edges[0].arrow, true); assert.equal(current.edges[0].dashed, true); assert.deepEqual(f.state.notes[0].blocks[0], { id: 'b1', type: 'text', text: '原始内容' });
+  await f.execute('edit_mindmap', { noteId: 'note1', blockId: 'map', nodes: [{ id: 'new', text: '新增', x: 900, y: 600, shape: 'circle' }], edges: [{ id: 'new-edge', from: 'n0', to: 'new' }], removeNodes: ['n1'] });
+  current = f.state.notes[0].blocks[1]; assert.equal(current.nodes.length, 150); assert.equal(current.edges.length, 1); assert.equal(current.edges[0].id, 'new-edge');
+  const invalid = [
+    { nodes: [{ id: 'new', collapsed: 'yes' }] }, { nodes: [{ id: 'bad', text: '缺位置' }] },
+    { nodes: [{ id: 'new', x: 32000 }] }, { nodes: [{ id: 'new' }, { id: 'new' }] },
+    { edges: [{ id: 'bad', from: 'n0', to: 'missing' }] }, { removeNodes: ['missing'] },
+    { nodes: [{ id: 'new', text: '矛盾' }], removeNodes: ['new'] }, { edges: [{ id: 'new-edge', from: 'n0', to: 'n0' }] },
+    { nodes: [{ id: 'new', execute: 'code' }] }, {},
+  ];
+  const snapshot = structuredClone(f.state); const count = f.writes.length;
+  for (const args of invalid) await assert.rejects(f.execute('edit_mindmap', { noteId: 'note1', blockId: 'map', ...args }));
+  await assert.rejects(f.execute('configure_mindmap', { noteId: 'note1', blockId: 'map', expand: 'false' }));
+  assert.deepEqual(f.state, snapshot); assert.equal(f.writes.length, count);
+  await f.execute('edit_mindmap', { noteId: 'note1', blockId: 'map', nodes: [{ id: 'new', text: '取消' }] }, false);
+  assert.equal(f.writes.length, count);
+  const prepared = await prepareAssistantTool(call('edit_mindmap', { noteId: 'note1', blockId: 'map', nodes: [{ id: 'new', text: '过期' }] }), f.env);
+  f.state.notes[0].title = '刚编辑'; await assert.rejects(prepared.run(), /发生变化/);
+  assert.equal(f.writes.length, count);
+});
+
 test('assistant regeneration shows concrete old and new notes before replacing and refuses stale or forged drafts', async () => {
   const f = fixture();
   f.state.notes.push({ id: 'ai1', docId: 'doc1', page: 1, kind: 'ai', title: '智能笔记', ai: { sections: [{ title: '旧标题', content: '旧正文' }] }, blocks: [{ id: 'personal', type: 'text', text: '个人补充' }], deleted: false });

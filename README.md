@@ -8,8 +8,8 @@
 
 | 使用方式 | 下载或打开方式 | 当前支持的资料 |
 | --- | --- | --- |
-| Windows 电脑 | 下载 [Windows 预览安装包 0.2.1](https://github.com/kaituozher11-png/yuan-notes/releases/download/preview-2026-11-28-agent-recovery/YuanNotes-Windows-Setup-0.2.1.exe)，运行安装后从开始菜单打开“源笔记” | PDF、PPT/PPTX、Word/DOCX；文档预览需安装转换工具 |
-| Android 手机或平板 | 下载 [Android 离线测试 APK 0.3.1](https://github.com/kaituozher11-png/yuan-notes/releases/download/preview-2026-11-28-agent-recovery/YuanNotes-Android-offline-0.3.1.apk)，在设备上打开并安装 | 可直接导入 PDF，最大 100 MB；Word/PPT 请先转为 PDF |
+| Windows 电脑 | 下载 [Windows 预览安装包 0.3.0](https://github.com/kaituozher11-png/yuan-notes/releases/download/preview-2026-11-28-mindmap-agent/YuanNotes-Windows-Setup-0.3.0.exe)，运行安装后从开始菜单打开“源笔记” | PDF、PPT/PPTX、Word/DOCX；文档预览需安装转换工具 |
+| Android 手机或平板 | 下载 [Android 离线测试 APK 0.4.0](https://github.com/kaituozher11-png/yuan-notes/releases/download/preview-2026-11-28-mindmap-agent/YuanNotes-Android-offline-0.4.0.apk)，在设备上打开并安装 | 可直接导入 PDF，最大 100 MB；Word/PPT 请先转为 PDF |
 | 本机网页版 | 按下方“从源码运行”在自己的电脑启动 | PDF、PPT/PPTX、Word/DOCX；需安装转换工具 |
 
 **目前没有可直接打开的公共网址，也没有 iOS 安装包。** GitHub 是源代码和下载页面，网页版需要在自己的电脑上运行。Windows 安装包未签名，首次安装可能出现系统来源提示；Android APK 是测试版，不是应用商店版本。
@@ -20,6 +20,8 @@ Windows 0.2.1 和 Android 0.3.1 包含批量导入、资料文件夹及智能笔
 新版已加入**智能助手**：点击机器人按钮，选择并解锁已保存的模型连接，然后输入指令。助手可调用资料、笔记、公式、图片、思维导图、原文标记、便利贴、模板和导入导出等功能，并逐步显示执行结果。涉及文件选择或密钥输入时会打开现有入口供你继续操作。见[智能助手使用指南](docs/智能助手使用指南.md)。
 
 0.2.1 / 0.3.1 修复了助手读取后因回复格式中断的问题，支持自动纠正格式、批量读页和会话内“继续任务”；要求全篇导图时会检查是否已经读取全部页面。
+
+Windows 0.3.0 / Android 0.4.0 新增可扩展导图画布、全屏与专注模式、三种自动布局、多选、撤销、折叠、搜索和完整导出；助手支持局部编辑导图、调整布局和导出。见[思维导图使用指南](docs/思维导图使用指南.md)和[本次验收记录](docs/思维导图与助手适配验收_2026-11-28.md)。
 
 Windows 预览版没有内置文档转换工具。阅读 PDF 需要系统能运行 `pdfinfo`；提取文字和生成页面图片还需要 `pdftotext`、`pdftoppm`。导入 PPT 需要 LibreOffice，导入 Word 需要 LibreOffice 或本机 Microsoft Word。安装步骤和界面说明见[图文安装与使用指南](docs/使用指南.md)。
 

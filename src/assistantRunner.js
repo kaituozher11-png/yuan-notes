@@ -42,7 +42,7 @@ export async function runAssistantTask({ history, context, ask, env, confirm, em
       const task = await prepareAssistantTool(tool, env);
       env.signal?.throwIfAborted();
       const signature = JSON.stringify(tool, function (key, value) { return value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value; });
-      const readOnly = ['search', 'read_page', 'read_pages', 'read_note', 'read_markup', 'open_document', 'open_feature', 'export_notes', 'backup', 'configure_view', 'copy_text'].includes(tool.name);
+      const readOnly = ['search', 'read_page', 'read_pages', 'read_note', 'read_markup', 'open_document', 'open_feature', 'export_notes', 'export_mindmap', 'backup', 'configure_view', 'copy_text'].includes(tool.name);
       if (!readOnly && writes.has(signature)) throw new Error('相同操作已执行成功，本次不重复执行');
       if (task.confirm) {
         const approved = await confirm({ label: task.label, tool, ...(task.confirmData ? { comparison: task.confirmData } : {}) });

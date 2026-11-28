@@ -5,7 +5,8 @@ import remarkGfm from 'remark-gfm';
 import rehypeKatex from 'rehype-katex';
 import { FormulaEntry, MathDisplay } from './FormulaDisplay';
 import { DRAWING_WIDTH, drawingHeight } from './drawingSize';
-import { edgeLabelPosition, edgePath, MAP_WIDTH, MAP_HEIGHT, nodeSize, normalizeMap } from './mindMapModel';
+import { mapExportBounds, normalizeMap } from './mindMapModel';
+import { MapElements } from './MindMapSvg';
 import { imageWidth } from './imageLayout';
 import { freeNoteBlocks } from './richDocument';
 import katex from 'katex';
@@ -17,15 +18,9 @@ function DrawingPrint({ strokes = [], height }) {
   const actualHeight = drawingHeight(height);
   return <svg viewBox={`0 0 ${DRAWING_WIDTH} ${actualHeight}`} className="drawing-print" aria-label="手写笔记"><rect width={DRAWING_WIDTH} height={actualHeight} fill="white"/>{strokes.map((stroke, index) => <polyline key={index} points={stroke.points.map((p) => p.join(',')).join(' ')} fill="none" stroke={stroke.tool === 'eraser' ? 'white' : stroke.color} strokeWidth={stroke.size} opacity={stroke.tool === 'highlighter' ? .35 : 1} strokeLinecap="round" strokeLinejoin="round"/>)}</svg>;
 }
-function MindMapPrint({ nodes = [], edges }) {
-  const map = normalizeMap({ nodes, edges });
-  return <svg viewBox={`0 0 ${MAP_WIDTH} ${MAP_HEIGHT}`} className="mindmap-print" aria-label="思维导图"><rect width={MAP_WIDTH} height={MAP_HEIGHT} fill="white"/>
-    {map.edges.map((edge) => { const from = nodes.find((n) => n.id === edge.from); const to = nodes.find((n) => n.id === edge.to); if (!from || !to) return null; const label = edgeLabelPosition(from, to); return <g key={edge.id}><path d={edgePath(from, { ...to, style: edge.style })} stroke={edge.color || '#618e90'} strokeWidth={edge.width || 2} fill="none"/>{edge.text && <text x={label.x} y={label.y} textAnchor="middle" fill="#36595d" fontSize="13">{edge.text}</text>}</g>; })}
-    {nodes.map((n) => { const { width, height } = nodeSize(n); return <g key={n.id} transform={`translate(${n.x} ${n.y})`} fill="#e9f3f2" stroke="#8dbfbd">
-      {n.shape === 'circle' ? <circle cx={width/2} cy={height/2} r={width/2-2}/> : n.shape === 'ellipse' ? <ellipse cx={width/2} cy={height/2} rx={width/2-2} ry={height/2-2}/> : n.shape === 'diamond' ? <polygon points={`${width/2},2 ${width-2},${height/2} ${width/2},${height-2} 2,${height/2}`}/> : <rect width={width} height={height} rx="5"/>}
-      <text x={width/2} y={height/2+5} textAnchor="middle" fill="#254c50" stroke="none" fontSize="16">{n.text?.slice(0, 12)}</text>
-    </g>; })}
-  </svg>;
+function MindMapPrint(value) {
+  const map = normalizeMap(value), bounds = mapExportBounds(map);
+  return <svg viewBox={`${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`} className="mindmap-print" aria-label="思维导图"><rect x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height} fill="white"/><MapElements nodes={map.nodes} edges={map.edges}/></svg>;
 }
 function RichPrintNode({ node }) {
   const children = (node.content || []).map((child, index) => <RichPrintNode node={child} key={index}/>);
@@ -65,7 +60,7 @@ function PrintBlock({ block }) {
     : <div className="mixed-print">{(block.parts || []).map((part) => <PrintBlock key={part.id} block={part} />)}</div>;
   if (block.type === 'image') return <figure style={{ width: `${imageWidth(block.width)}%`, marginLeft: block.align === 'left' ? 0 : 'auto', marginRight: block.align === 'right' ? 0 : 'auto' }}><img src={block.data} alt={block.text || '笔记图片'}/><figcaption>{block.text}</figcaption></figure>;
   if (block.type === 'drawing') return <figure><DrawingPrint strokes={block.strokes} height={block.height}/></figure>;
-  if (block.type === 'mindmap') return <figure><MindMapPrint nodes={block.nodes} edges={block.edges}/></figure>;
+  if (block.type === 'mindmap') return <figure><MindMapPrint {...block}/></figure>;
   if (block.type === 'formula') return <div className="formula-print"><MathDisplay latex={block.text} output="mathml" /></div>;
   return <div className="text-print"><Markdown>{block.text}</Markdown></div>;
 }

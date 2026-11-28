@@ -2,6 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { blockToRich, blocksToRich, freeNoteBlocks, partsToRich, richText } from '../src/richDocument.js';
 
+test('legacy embedded maps retain expanded dimensions and free connections when lifted into separate blocks', () => {
+  const map = { id: 'expanded', type: 'mindmap', width: 4800, height: 3600, nodes: [{ id: 'a', text: '主题', x: 3000, y: 2000 }], edges: [] };
+  const rich = partsToRich([{ type: 'text', text: '前文' }, map, { type: 'text', text: '后文' }]);
+  const blocks = freeNoteBlocks([{ id: 'legacy', type: 'mixed', rich }]);
+  const lifted = blocks.find(block => block.type === 'mindmap');
+  assert.equal(lifted.width, 4800); assert.equal(lifted.height, 3600); assert.deepEqual(lifted.edges, []); assert.equal(lifted.nodes[0].x, 3000);
+});
+
 test('old text, formula, and image become one ordered rich document', () => {
   const doc = partsToRich([
     { id: 'a', type: 'text', text: '前文' },

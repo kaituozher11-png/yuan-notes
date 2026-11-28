@@ -2,7 +2,7 @@ import { assistantTools } from './assistantProtocol.js';
 import { aiNotePresets, validateAiGuidance, validateAiOutline } from './aiNoteOutline.js';
 import { freeNoteBlocks, partsToRich } from './richDocument.js';
 import { folderName, folderTarget } from './libraryFolders.js';
-import { SHAPES, placeNode } from './mindMapModel.js';
+import { SHAPES, autoLayout, hasMapOverlaps, mapDimensions, MAX_MAP_SIZE, normalizeMap, nodeSize } from './mindMapModel.js';
 import { validateMarkup } from '../server/markup.js';
 
 const uid = () => crypto.randomUUID();
@@ -40,24 +40,33 @@ function drawingOf(value) {
   });
 }
 
-function mapOf(part) {
-  check(Array.isArray(part.nodes) && part.nodes.length <= 100, '思维导图最多100个节点');
+function mapOf(part, limit = 100) {
+  check(Array.isArray(part.nodes) && part.nodes.length > 0 && part.nodes.length <= limit, `思维导图须为1到${limit}个节点`);
   const ids = new Set();
   const nodes = part.nodes.map(node => {
     str(node.id, 80, '节点编号'); check(!ids.has(node.id), '节点编号重复'); ids.add(node.id);
-    str(node.text, 300, '节点文字', true); check(SHAPES.includes(node.shape)); number(node.x, 0, 1200); number(node.y, 0, 700);
-    return { id: node.id, text: node.text, shape: node.shape, ...placeNode(node.x, node.y, node) };
+    str(node.text, 1000, '节点文字', true); check(SHAPES.includes(node.shape || 'rectangle')); number(node.x, 0, MAX_MAP_SIZE); number(node.y, 0, MAX_MAP_SIZE);
+    const appearance = {};
+    for (const name of ['color', 'fill', 'textColor']) if (node[name] !== undefined) appearance[name] = color(node[name]);
+    for (const [name, min, max] of [['width', 86, 640], ['height', 54, 1200], ['fontSize', 12, 28]]) if (node[name] !== undefined) appearance[name] = number(node[name], min, max);
+    for (const name of ['bold', 'collapsed']) if (node[name] !== undefined) { check(typeof node[name] === 'boolean'); appearance[name] = node[name]; }
+    const size = nodeSize(node);
+    check(node.x + size.width <= MAX_MAP_SIZE - 12 && node.y + size.height <= MAX_MAP_SIZE - 12, '节点超出画布边界');
+    return { ...node, id: node.id, text: node.text, shape: node.shape || 'rectangle', ...appearance };
   });
   check(part.edges === undefined || Array.isArray(part.edges));
-  check((part.edges || []).length <= 300, '连线过多');
+  check((part.edges || []).length <= (limit === 100 ? 300 : 1500), '连线过多');
   const edgeIds = new Set();
   const edges = (part.edges || []).map(edge => {
     check(ids.has(edge.from) && ids.has(edge.to) && edge.from !== edge.to, '连线节点不存在或连向自身');
-    const id = edge.id || uid(); check(!edgeIds.has(id), '连线编号重复'); edgeIds.add(id);
+    const id = edge.id || uid(); str(id, 80, '连线编号'); check(!edgeIds.has(id), '连线编号重复'); edgeIds.add(id);
     check(['curve', 'straight', 'elbow'].includes(edge.style || 'curve'));
-    return { id, from: edge.from, to: edge.to, text: str(edge.text || '', 300, '连线文字', true), style: edge.style || 'curve', color: color(edge.color || '#618e90'), width: number(edge.width || 2, 1, 8) };
+    for (const name of ['arrow', 'dashed']) if (edge[name] !== undefined) check(typeof edge[name] === 'boolean');
+    return { id, from: edge.from, to: edge.to, text: str(edge.text || '', 300, '连线文字', true), style: edge.style || 'curve', color: color(edge.color || '#618e90'), width: number(edge.width || 2, 1, 8), ...(edge.arrow !== undefined ? { arrow: edge.arrow } : {}), ...(edge.dashed !== undefined ? { dashed: edge.dashed } : {}) };
   });
-  return { nodes, edges };
+  if (part.width !== undefined) number(part.width, 1200, MAX_MAP_SIZE);
+  if (part.height !== undefined) number(part.height, 700, MAX_MAP_SIZE);
+  return { nodes, edges, ...mapDimensions({ nodes, width: part.width, height: part.height }) };
 }
 
 function partOf(part, env) {
@@ -199,7 +208,7 @@ export async function prepareAssistantTool(tool, env) {
     }
     case 'create_note': {
       const doc = docBy(args.docId); const page = pageOf(doc, args.page); const title = str(args.title, 100, '笔记标题');
-      const blocks = args.parts ? appendParts([], args.parts, env) : [];
+      const blocks = args.parts ? appendParts([], args.parts, env).map(block => block.type === 'mindmap' && hasMapOverlaps(block.nodes) ? { ...block, ...autoLayout(block, 'right') } : block) : [];
       return task(`在《${doc.name}》第${page}页新建笔记“${title}”`, async () => {
         const made = await request('/notes', 'POST', { docId: doc.id, page, title, blocks });
         return noteInfo(made);
@@ -235,6 +244,56 @@ export async function prepareAssistantTool(tool, env) {
       const note = noteBy(args.noteId); const ids = (note.blocks || []).map(block => block.id);
       check(Array.isArray(args.ids) && args.ids.length === ids.length && new Set(args.ids).size === ids.length && args.ids.every(id => ids.includes(id)), '请提供笔记全部区块编号');
       return task(`调整“${note.title}”的内容顺序`, saveNote(note, { blocks: args.ids.map(id => note.blocks.find(block => block.id === id)) }), true);
+    }
+    case 'configure_mindmap': {
+      fields(args, ['noteId', 'blockId', 'layout', 'width', 'height', 'expand', 'expandAll']);
+      for (const key of ['expand', 'expandAll']) if (args[key] !== undefined) check(typeof args[key] === 'boolean', '展开参数须为布尔值');
+      const note = noteBy(args.noteId), block = note.blocks?.find(item => item.id === args.blockId && item.type === 'mindmap');
+      check(block, '思维导图区块不存在，请先读取笔记');
+      let map = normalizeMap(block);
+      if (args.layout !== undefined) map = autoLayout(map, args.layout);
+      if (args.width !== undefined) map.width = number(args.width, 1200, MAX_MAP_SIZE);
+      if (args.height !== undefined) map.height = number(args.height, 700, MAX_MAP_SIZE);
+      if (args.expand) { map.width = Math.min(MAX_MAP_SIZE, map.width + 800); map.height = Math.min(MAX_MAP_SIZE, map.height + 600); }
+      if (args.expandAll) map.nodes = map.nodes.map(node => ({ ...node, collapsed: false }));
+      map = normalizeMap(map);
+      return task(`调整“${note.title}”中的导图画布和布局`, saveNote(note, { blocks: note.blocks.map(item => item.id === block.id ? { ...block, ...map } : item) }), !!args.layout);
+    }
+    case 'edit_mindmap': {
+      fields(args, ['noteId', 'blockId', 'nodes', 'edges', 'removeNodes', 'removeEdges']);
+      const note = noteBy(args.noteId), block = note.blocks?.find(item => item.id === args.blockId && item.type === 'mindmap');
+      check(block, '思维导图区块不存在，请先读取笔记');
+      const map = normalizeMap(block);
+      const patches = (value, allowed) => {
+        check(value === undefined || Array.isArray(value) && value.length <= 100, '每次最多修改100项');
+        const ids = new Set();
+        return (value || []).map(item => { fields(item, allowed); str(item.id, 80, '编号'); check(!ids.has(item.id), '修改编号重复'); ids.add(item.id); return item; });
+      };
+      const nodes = patches(args.nodes, ['id', 'text', 'x', 'y', 'shape', 'width', 'height', 'fontSize', 'fill', 'textColor', 'color', 'bold', 'collapsed']);
+      const edges = patches(args.edges, ['id', 'from', 'to', 'text', 'style', 'color', 'width', 'arrow', 'dashed']);
+      const removals = (value, items) => {
+        check(value === undefined || Array.isArray(value) && value.length <= 100, '每次最多删除100项');
+        const ids = new Set(value || []); check(ids.size === (value || []).length, '删除编号重复');
+        for (const id of ids) check(items.some(item => item.id === id), '删除对象不存在');
+        return ids;
+      };
+      const removeNodes = removals(args.removeNodes, map.nodes), removeEdges = removals(args.removeEdges, map.edges);
+      check(nodes.length + edges.length + removeNodes.size + removeEdges.size > 0, '请提供要修改的节点或连线');
+      check(nodes.every(node => !removeNodes.has(node.id)) && edges.every(edge => !removeEdges.has(edge.id)), '不能同时修改和删除同一对象');
+      const merge = (items, patches, removed) => {
+        const lookup = new Map(items.filter(item => !removed.has(item.id)).map(item => [item.id, item]));
+        for (const patch of patches) lookup.set(patch.id, { ...lookup.get(patch.id), ...patch });
+        return [...lookup.values()];
+      };
+      const nextNodes = merge(map.nodes, nodes, removeNodes);
+      const nextEdges = merge(map.edges.filter(edge => !removeNodes.has(edge.from) && !removeNodes.has(edge.to)), edges, removeEdges);
+      const next = mapOf({ ...map, nodes: nextNodes, edges: nextEdges }, 500);
+      return task(`修改“${note.title}”中的${nodes.length}个节点、${edges.length}条连线${removeNodes.size || removeEdges.size ? '并删除所选对象' : ''}`, saveNote(note, { blocks: note.blocks.map(item => item.id === block.id ? { ...block, ...next } : item) }), true);
+    }
+    case 'export_mindmap': {
+      const note = noteBy(args.noteId), block = note.blocks?.find(item => item.id === args.blockId && item.type === 'mindmap'); check(block, '思维导图区块不存在');
+      check(['svg', 'png', 'json'].includes(args.format), '导图导出格式须为svg、png或json');
+      return task(`准备导出“${note.title}”的思维导图`, async () => { env.download('mindmap', docBy(note.docId), { noteId: note.id, blockId: block.id, format: args.format }); return { ready: true, message: '请点击对话中的下载按钮' }; });
     }
     case 'reorder_notes': {
       const doc = docBy(args.docId); const page = pageOf(doc, args.page);

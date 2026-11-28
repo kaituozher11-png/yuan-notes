@@ -115,7 +115,7 @@ export default function AssistantPanel({ open, onClose, models, modelId, setMode
             }
             return latest.current.feature(args);
           },
-          download: (kind, doc) => emit(message('download', kind === 'notes' ? `下载《${doc.name}》的笔记` : '下载资料库备份', { kind, doc })),
+          download: (kind, doc, options) => emit(message('download', kind === 'notes' ? `下载《${doc.name}》的笔记` : kind === 'mindmap' ? `下载思维导图（${options.format.toUpperCase()}）` : '下载资料库备份', { kind, doc, options })),
           progress: text => emit(message('status', text)),
         },
         confirm: value => new Promise(resolve => { confirmation.current = resolve; setPending(value); }),
@@ -169,6 +169,13 @@ export default function AssistantPanel({ open, onClose, models, modelId, setMode
         const doc = state.docs.find(doc => doc.id === item.doc.id && !doc.deleted);
         if (!doc) throw new Error('资料不存在或已移入回收站');
         await exportDocument(doc, state.notes.filter(note => !note.deleted));
+      } else if (item.kind === 'mindmap') {
+        const state = await api('/state');
+        const note = state.notes.find(note => note.id === item.options.noteId && !note.deleted);
+        if (!note || !state.docs.some(doc => doc.id === note.docId && !doc.deleted)) throw new Error('笔记不存在或已移入回收站');
+        const block = note.blocks.find(block => block.id === item.options.blockId && block.type === 'mindmap');
+        if (!block) throw new Error('导图区块已不存在');
+        const { exportMindMap } = await import('./mindMapExport'); await exportMindMap(block, item.options.format);
       } else if (window.YuanOfflineApp) await offlineBackup();
       else { const link = document.createElement('a'); link.href = '/api/backup'; link.download = ''; link.click(); }
     } catch (failure) { setError(failure.message); }
