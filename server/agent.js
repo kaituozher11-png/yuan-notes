@@ -2,6 +2,7 @@ import { pageText, pageImage } from './documents.js';
 import net from 'node:net';
 import { modelDispatcher, publicModelDispatcher } from './model-network.js';
 import { generationInstruction, normalizeAiAnswer, validateAiGuidance, validateAiOutline } from '../src/aiNoteOutline.js';
+import { assistantMessages, parseAssistantTurn } from '../src/assistantProtocol.js';
 
 export function normalizeEndpoint(value) {
   const url = new URL(value);
@@ -58,16 +59,12 @@ async function modelServiceError(response, key) {
   return new Error(`${status === 401 || status === 403 || status === 402 || status === 429 ? fallback : `模型服务返回错误 ${status}`}：${detail}`);
 }
 
-export async function callModel({ endpoint, key, model, page, text, image, outline, guidance = '', signal, test = false }) {
+export async function requestChat({ endpoint, key, model, messages, maxTokens = 2200, signal, temperature = 0.2 }) {
   const url = normalizeEndpoint(endpoint);
   if (!key || !model) throw new Error('请填写模型名称和 API 密钥');
-  const instruction = test
-    ? '这是格式测试。只返回合法 JSON 对象：{"summary":"连接正常","concepts":[],"important":[],"cautions":[],"formula":[],"quiz":[]}。不要解释或代码块。'
-    : generationInstruction(page, outline, guidance);
-  const content = test ? '请返回最小笔记 JSON。' : [{ type: 'text', text: `第 ${page} 页提取文字：\n${text || '无可提取文字，请依据页面图片，并标注需核对。'}` }, ...(image ? [{ type: 'image_url', image_url: { url: image } }] : [])];
   let response;
   try {
-    response = await fetch(url, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify({ model, messages: [{ role: 'system', content: instruction }, { role: 'user', content }], temperature: test ? 0 : 0.2, max_tokens: test ? 512 : 2200 }), signal, dispatcher: process.env.YINGXING_PUBLIC === '1' ? publicModelDispatcher() : modelDispatcher(url) });
+    response = await fetch(url, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens }), signal: signal || AbortSignal.timeout(120000), dispatcher: process.env.YINGXING_PUBLIC === '1' ? publicModelDispatcher() : modelDispatcher(url) });
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     if (error.name === 'TimeoutError') throw new Error('连接模型服务商超时，请检查网络或代理');
@@ -80,6 +77,21 @@ export async function callModel({ endpoint, key, model, page, text, image, outli
   const choice = body.choices?.[0];
   const answer = choice?.message?.content;
   if (typeof answer !== 'string') throw new Error('模型返回内容格式不兼容');
+  return choice;
+}
+
+export async function callAssistant(input) {
+  const choice = await requestChat({ ...input, messages: assistantMessages(input), maxTokens: 6000 });
+  return parseAssistantTurn(choice.message.content, choice.finish_reason);
+}
+
+export async function callModel({ endpoint, key, model, page, text, image, outline, guidance = '', signal, test = false }) {
+  const instruction = test
+    ? '这是格式测试。只返回合法 JSON 对象：{"summary":"连接正常","concepts":[],"important":[],"cautions":[],"formula":[],"quiz":[]}。不要解释或代码块。'
+    : generationInstruction(page, outline, guidance);
+  const content = test ? '请返回最小笔记 JSON。' : [{ type: 'text', text: `第 ${page} 页提取文字：\n${text || '无可提取文字，请依据页面图片，并标注需核对。'}` }, ...(image ? [{ type: 'image_url', image_url: { url: image } }] : [])];
+  const choice = await requestChat({ endpoint, key, model, messages: [{ role: 'system', content: instruction }, { role: 'user', content }], temperature: test ? 0 : 0.2, maxTokens: test ? 512 : 2200, signal });
+  const answer = choice.message.content;
   const ai = parseNoteAnswer(answer, choice?.finish_reason, test);
   if (test) {
     if (typeof ai.summary !== 'string') throw new Error('模型已连接，但未按要求返回笔记格式');

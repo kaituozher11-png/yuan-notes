@@ -47,6 +47,18 @@ test('document and note API preserves personal work across generation', async (t
   let ready = false;
   for (let i = 0; i < 150; i++) { try { if ((await request(base, '/api/health')).status === 200) { ready = true; break; } } catch {} await new Promise((resolve) => setTimeout(resolve, 100)); }
   assert.ok(ready, 'API server started');
+  for (const [name, bytes, message] of [
+    ['empty.pdf', Buffer.alloc(0), /文件为空/],
+    ['renamed.pdf', Buffer.from('This is not a PDF'), /不是有效的 PDF/],
+    ['incomplete.pdf', Buffer.from('%PDF-1.7\ntruncated file without page objects'), /无法解析 PDF/],
+    ['protected.pdf', await readFile('tests/fixtures/encrypted.pdf'), /需要密码/],
+  ]) {
+    const invalid = new FormData(); invalid.append('file', new Blob([bytes]), name);
+    const result = await request(base, '/api/docs', { method: 'POST', body: invalid });
+    assert.equal(result.status, 400); assert.match(result.data.error, message);
+    assert.ok(!result.data.error.includes(dir), 'invalid-file messages must not expose internal storage paths');
+  }
+  assert.equal((await request(base, '/api/state')).data.docs.length, 0);
   assert.equal((await request(base, '/api/state', { headers: { Origin: 'https://untrusted.example' } })).status, 403);
   const wrongHostStatus = await new Promise((resolve, reject) => {
     http.get(`${base}/api/state`, { headers: { Host: 'untrusted.example' } }, (response) => { response.resume(); resolve(response.statusCode); }).on('error', reject);

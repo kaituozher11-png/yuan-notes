@@ -1,7 +1,7 @@
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
-import { callOfflineModel, generateOfflinePage } from './offlineModel';
+import { callOfflineAssistant, callOfflineModel, generateOfflinePage, readOfflineText } from './offlineModel';
 import { pdfDocumentOptions } from './pdfAssets';
 import { createFolder, folderName, folderTarget } from './libraryFolders';
 
@@ -129,6 +129,7 @@ export async function offlinePdf(id) {
 }
 
 export async function offlineApi(path, options = {}) {
+  options.signal?.throwIfAborted();
   const method = (options.method || 'GET').toUpperCase();
   if (path === '/auth/session' && method === 'GET') return { mode: 'local', user: null };
   if (path === '/state' && method === 'GET') { await writeQueue.catch(() => {}); return state(); }
@@ -183,7 +184,7 @@ export async function offlineApi(path, options = {}) {
     if (!doc || !Number.isInteger(page) || page < 1 || page > doc.pages) throw new Error('原文页不存在');
     const now = new Date().toISOString();
     const order = Math.max(0, ...current.notes.filter((note) => note.docId === doc.id && note.page === page && !note.deleted).map((note) => Number(note.order || 0))) + 1;
-    const note = { id: crypto.randomUUID(), docId: doc.id, page, order, title: String(fields.title || '我的补充').slice(0, 100), kind: fields.kind === 'ai' ? 'ai' : 'user', ai: null, blocks: [], links: [], status: 'new', deleted: false, createdAt: now, updatedAt: now };
+    const note = { id: crypto.randomUUID(), docId: doc.id, page, order, title: String(fields.title || '我的补充').slice(0, 100), kind: fields.kind === 'ai' ? 'ai' : 'user', ai: fields.ai || null, blocks: Array.isArray(fields.blocks) ? fields.blocks : [], links: Array.isArray(fields.links) ? fields.links : [], ...(fields.style ? { style: fields.style } : {}), status: 'new', deleted: false, createdAt: now, updatedAt: now };
     current.notes.push(note);
     return note;
   });
@@ -226,6 +227,14 @@ export async function offlineApi(path, options = {}) {
     return { ok: true };
   });
   if (path === '/models/test' && method === 'POST') return callOfflineModel({ ...body(options), test: true });
+  if (path === '/assistant/turn' && method === 'POST') return callOfflineAssistant({ ...body(options), signal: options.signal });
+  const textPage = path.match(/^\/docs\/([^/]+)\/pages\/(\d+)\/text$/);
+  if (textPage && method === 'GET') {
+    const doc = currentDoc(await state(), textPage[1]);
+    const page = Number(textPage[2]);
+    if (!doc || page < 1 || page > doc.pages) throw new Error('原文页不存在');
+    return readOfflineText(doc.id, page, offlinePdf);
+  }
   if (path === '/generate' && method === 'POST') {
     const fields = body(options);
     const current = await state();
@@ -234,7 +243,8 @@ export async function offlineApi(path, options = {}) {
     if (!doc || !Number.isInteger(page) || page < 1 || page > doc.pages) throw new Error('原文页不存在');
     const existing = current.notes.find((note) => note.docId === doc.id && note.page === page && note.kind === 'ai' && !note.deleted);
     if (existing && !fields.preview) throw new Error('本页已有智能笔记，请单页预览差异后确认替换');
-    const ai = await generateOfflinePage({ ...fields, page }, offlinePdf);
+    const ai = await generateOfflinePage({ ...fields, page, signal: options.signal }, offlinePdf);
+    options.signal?.throwIfAborted();
     if (fields.preview) {
       const token = crypto.randomUUID();
       previews.set(token, { docId: doc.id, page, ai, createdAt: Date.now() });

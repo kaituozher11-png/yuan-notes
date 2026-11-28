@@ -2,6 +2,7 @@ import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { pdfDocumentOptions } from './pdfAssets';
 import { generationInstruction, normalizeAiAnswer, validateAiGuidance, validateAiOutline } from './aiNoteOutline';
+import { assistantMessages, parseAssistantTurn } from './assistantProtocol';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -28,18 +29,46 @@ function encodeRequest(value) {
   return JSON.stringify(value);
 }
 
-function nativeRequest(url, payload, key) {
+function nativeRequest(url, payload, key, signal) {
+  signal?.throwIfAborted();
   if (!window.YuanModelBridge) return fetch(url, {
     method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-    body: encodeRequest(payload), signal: AbortSignal.timeout(120000),
+    body: encodeRequest(payload), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000),
   }).then(async (response) => ({ status: response.status, body: await response.text() }));
   return new Promise((resolve, reject) => {
     const id = String(++nextRequest);
-    const timer = setTimeout(() => { requests.delete(id); reject(new Error('模型请求超时')); }, 125000);
-    requests.set(id, (result) => { clearTimeout(timer); resolve(result); });
+    const cleanup = () => { clearTimeout(timer); requests.delete(id); signal?.removeEventListener('abort', abort); };
+    const abort = () => { cleanup(); reject(signal.reason || new DOMException('已停止', 'AbortError')); };
+    const timer = setTimeout(() => { cleanup(); reject(new Error('模型请求超时')); }, 125000);
+    signal?.addEventListener('abort', abort, { once: true });
+    requests.set(id, (result) => { cleanup(); resolve(result); });
     try { window.YuanModelBridge.request(id, url, encodeRequest(payload), key); }
-    catch (error) { clearTimeout(timer); requests.delete(id); reject(error); }
+    catch (error) { cleanup(); reject(error); }
   });
+}
+
+export async function callOfflineAssistant(input) {
+  if (!modelOnline()) throw new Error('智能助手需要联网，请联网后重试');
+  if (!input.key || !input.model) throw new Error('请先选择并解锁模型连接');
+  const response = await nativeRequest(normalizeModelEndpoint(input.endpoint), {
+    model: input.model, messages: assistantMessages(input), temperature: 0.2, max_tokens: 6000,
+  }, input.key, input.signal);
+  input.signal?.throwIfAborted();
+  if (response.status !== 200) throw serviceError(response.status, response.body.slice(0, maxResponse), input.key);
+  let data;
+  try { data = JSON.parse(response.body.slice(0, maxResponse)); }
+  catch { throw new Error('助手返回内容不是有效 JSON'); }
+  const choice = data.choices?.[0];
+  return parseAssistantTurn(choice?.message?.content, choice?.finish_reason);
+}
+
+export async function readOfflineText(docId, page, loadPdf) {
+  const loading = pdfjs.getDocument({ data: await loadPdf(docId), ...pdfDocumentOptions });
+  try {
+    const source = await (await loading.promise).getPage(page);
+    const content = await source.getTextContent();
+    return { text: content.items.map(item => (item.str || '') + (item.hasEOL ? '\n' : ' ')).join('').slice(0, 20000) };
+  } finally { await loading.destroy(); }
 }
 
 if (typeof window !== 'undefined') {
@@ -85,7 +114,7 @@ function serviceError(status, body, key) {
   return new Error(detail ? `${fallback}：${detail}` : fallback);
 }
 
-export async function callOfflineModel({ endpoint, key, model, page, text, image, outline, guidance = '', test = false }) {
+export async function callOfflineModel({ endpoint, key, model, page, text, image, outline, guidance = '', test = false, signal }) {
   if (!modelOnline()) throw new Error('无法生成智能笔记，请联网');
   if (!key || !model) throw new Error('请填写模型名称和 API 密钥');
   const url = normalizeModelEndpoint(endpoint);
@@ -98,8 +127,10 @@ export async function callOfflineModel({ endpoint, key, model, page, text, image
     response = await nativeRequest(url, {
       model, messages: [{ role: 'system', content: instruction }, { role: 'user', content }],
       temperature: test ? 0 : 0.2, max_tokens: test ? 512 : 2200,
-    }, key);
-  } catch {
+    }, key, signal);
+    signal?.throwIfAborted();
+  } catch (error) {
+    if (signal?.aborted) throw error;
     throw new Error(modelOnline() ? '无法连接模型服务商，请检查网络和接口地址' : '无法生成智能笔记，请联网');
   }
   if (response.status !== 200) {
@@ -119,7 +150,7 @@ export async function callOfflineModel({ endpoint, key, model, page, text, image
   return normalizeAiAnswer(ai, outline);
 }
 
-export async function generateOfflinePage({ docId, page, endpoint, key, model, vision, outline, guidance = '' }, loadPdf) {
+export async function generateOfflinePage({ docId, page, endpoint, key, model, vision, outline, guidance = '', signal }, loadPdf) {
   if (!modelOnline()) throw new Error('无法生成智能笔记，请联网');
   if (outline !== undefined) validateAiOutline(outline);
   validateAiGuidance(guidance);
@@ -142,5 +173,6 @@ export async function generateOfflinePage({ docId, page, endpoint, key, model, v
     }
   } finally { await loading.destroy(); }
   if (!text && !image) throw new Error('此页没有可提取文字，请使用支持图片的模型');
-  return callOfflineModel({ endpoint, key, model, page, text, image, outline, guidance });
+  signal?.throwIfAborted();
+  return callOfflineModel({ endpoint, key, model, page, text, image, outline, guidance, signal });
 }

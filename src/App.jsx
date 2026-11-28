@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ArrowRight,
   BookOpen,
+  Bot,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -64,6 +65,7 @@ import { uploadNoteImage, pastedImage } from './noteImages';
 const PdfPage = lazy(() => import("./PdfPage"));
 const FormulaEditor = lazy(() => import("./FormulaEditor"));
 const RichNoteEditor = lazy(() => import("./RichNoteEditor"));
+const AssistantPanel = lazy(() => import('./AssistantPanel'));
 
 const defaultTemplate = { id: "default", name: "自由笔记", sections: [], style: { accent: '#176d72', paper: 'plain' } };
 const stamp = (value) =>
@@ -176,6 +178,18 @@ function NoteEditor({ note, update, addLink, onJump, onEditRegion, onRemoveLink,
     refreshHistory((n) => n + 1);
     update(next);
   }
+  useEffect(() => {
+    const handle = event => {
+      if (event.detail.noteId !== note.id) return;
+      const operation = event.detail.operation;
+      const available = operation === 'undo' ? history.current.past.length : history.current.future.length;
+      if (!available) return event.detail.finish({ ok: false, message: operation === 'undo' ? '当前笔记没有可撤销的编辑记录' : '当前笔记没有可重做的编辑记录' });
+      if (operation === 'undo') undo(); else redo();
+      event.detail.finish({ ok: true, message: operation === 'undo' ? '已撤销上一次编辑' : '已重做上一次编辑' });
+    };
+    window.addEventListener('yuan:note-history', handle);
+    return () => window.removeEventListener('yuan:note-history', handle);
+  });
   function blockPatch(blockId, changes) {
     patch({
       blocks: currentNote.current.blocks.map((block) =>
@@ -487,6 +501,8 @@ export default function App({ account, onAccount }) {
   const [data, setData] = useState({ docs: [], notes: [], templates: [], folders: [] });
   const [saveStatus, setSaveStatus] = useState({});
   const [screen, setScreen] = useState("library");
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantStarted, setAssistantStarted] = useState(false);
   const [docId, setDocId] = useState(null);
   const [page, setPage] = useState(1);
   const [notePage, setNotePage] = useState(1);
@@ -554,6 +570,7 @@ export default function App({ account, onAccount }) {
   const toastTimer = useRef(null);
   const stopRef = useRef(false);
   const saves = useRef(new Map());
+  const noteWrites = useRef(new Set());
   const panelsRef = useRef(null);
   const noteResize = useRef(null);
   const markupSaves = useRef(new Map());
@@ -626,8 +643,11 @@ export default function App({ account, onAccount }) {
     const pending = markupSaves.current.get(key) || { chain: Promise.resolve() };
     clearTimeout(pending.timer);
     const save = () => {
-      pending.chain = pending.chain.catch(() => {}).then(() => api(`/docs/${targetDoc}/pages/${targetPage}/markup`, json('PUT', next))).catch((error) => notify(`原文标记保存失败：${error.message}`));
+      pending.timer = null;
+      pending.error = null;
+      pending.chain = pending.chain.catch(() => {}).then(() => api(`/docs/${targetDoc}/pages/${targetPage}/markup`, json('PUT', next))).catch((error) => { pending.error = error; notify(`原文标记保存失败：${error.message}`); });
     };
+    pending.save = save;
     if (immediate) save();
     else pending.timer = setTimeout(save, 300);
     markupSaves.current.set(key, pending);
@@ -681,10 +701,15 @@ export default function App({ account, onAccount }) {
     clearTimeout(saves.current.get(next.id)?.timer);
     const timer = setTimeout(async () => {
       saves.current.delete(next.id);
-      try { await api(`/notes/${next.id}`, json("PUT", next)); setSaveStatus((old) => ({ ...old, [next.id]: 'saved' })); }
+      try { await persistNote(next); setSaveStatus((old) => ({ ...old, [next.id]: 'saved' })); }
       catch (e) { setSaveStatus((old) => ({ ...old, [next.id]: 'error' })); notify(`保存失败：${e.message}`); }
     }, 400);
     saves.current.set(next.id, { timer, note: next });
+  }
+  async function persistNote(item) {
+    const request = api(`/notes/${item.id}`, json('PUT', item));
+    noteWrites.current.add(request);
+    try { return await request; } finally { noteWrites.current.delete(request); }
   }
   async function flushSaves() {
     const pending = [...saves.current.values()];
@@ -692,10 +717,19 @@ export default function App({ account, onAccount }) {
     await Promise.all(
       pending.map(async ({ timer, note: item }) => {
         clearTimeout(timer);
-        await api(`/notes/${item.id}`, json("PUT", item));
+        await persistNote(item);
         setSaveStatus((old) => ({ ...old, [item.id]: 'saved' }));
       }),
     );
+  }
+  async function flushAssistantSaves() {
+    await Promise.all([...noteWrites.current]);
+    await flushSaves();
+    for (const pending of markupSaves.current.values()) {
+      if (pending.timer) { clearTimeout(pending.timer); pending.timer = null; pending.save?.(); }
+      await pending.chain;
+      if (pending.error) throw new Error('原文标记尚未保存成功，请先重试保存，再使用助手');
+    }
   }
   async function createNote(template = defaultTemplate) {
     try {
@@ -1159,6 +1193,45 @@ export default function App({ account, onAccount }) {
     try { await flushSaves(); await exportDocument(doc, data.notes); }
     catch (error) { notify(`导出失败：${error.message}`); }
   }
+  function openAssistant() { setAssistantStarted(true); setAssistantOpen(true); }
+  function assistantNavigate({ doc: targetDoc, page: targetPage, layout: targetLayout = 'split', noteId: targetNote, zoom: targetZoom }) {
+    openDoc(targetDoc, targetPage);
+    setLayout(targetLayout);
+    if (targetNote) setNoteId(targetNote);
+    if (targetZoom !== undefined) setZoom(targetZoom);
+  }
+  async function assistantFeature(args) {
+    const { feature, doc: targetDoc, page: targetPage } = args;
+    await flushSaves();
+    if (['models', 'templates', 'trash', 'library'].includes(feature)) setScreen(feature);
+    else if (feature === 'import') { setScreen('library'); openImport(); }
+    else if (feature === 'restore') {
+      if (!window.YuanOfflineApp) throw new Error('当前网页版提供备份下载；恢复备份请使用安卓离线版的恢复入口');
+      setScreen('library');
+      notify('请点击资料库中的“恢复备份”按钮并选择备份文件');
+    } else {
+      assistantNavigate({ ...args, layout: ['region', 'pen', 'highlighter', 'eraser', 'sticky'].includes(feature) ? 'doc' : 'note' });
+      if (feature === 'region') setRegionMode(true);
+      else if (['pen', 'highlighter', 'eraser', 'sticky'].includes(feature)) { setMarkupOpen(true); setMarkupTool(feature); }
+      else if (['undo', 'redo'].includes(feature)) {
+        const state = await api('/state');
+        const selected = args.noteId || state.notes.find(item => item.docId === targetDoc.id && item.page === targetPage && !item.deleted)?.id;
+        if (!selected) throw new Error('本页尚无笔记');
+        setNoteId(selected);
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const result = await new Promise(resolve => {
+          const timer = setTimeout(() => resolve({ ok: false, message: '笔记历史尚未就绪，请在笔记中点击撤销或重做' }), 1000);
+          window.dispatchEvent(new CustomEvent('yuan:note-history', { detail: { noteId: selected, operation: feature, finish: value => { clearTimeout(timer); resolve(value); } } }));
+        });
+        if (!result.ok) throw new Error(result.message);
+        await flushSaves();
+        notify(result.message);
+        return result;
+      } else notify('已打开笔记编辑区，可在工具栏选择公式、图片、手写或思维导图');
+    }
+    setAssistantOpen(false);
+    return { opened: true, requiresUserInteraction: true, message: '已打开功能入口，请在界面继续操作' };
+  }
 
   return (
     <div className="app-shell">
@@ -1169,6 +1242,7 @@ export default function App({ account, onAccount }) {
         </button>
         <div className="header-spacer" />
         <div className="header-actions">
+          <IconButton title="智能助手" onClick={openAssistant}><Bot size={20}/></IconButton>
           {screen === "workspace" && (
             <>
               <span className="header-doc-name">{doc?.name}</span>
@@ -1190,6 +1264,7 @@ export default function App({ account, onAccount }) {
       </header>
       <div className="app-body">
         <aside className="global-nav" aria-label="主导航">
+          <button className={assistantOpen ? 'nav-item active' : 'nav-item'} onClick={openAssistant} title="智能助手"><Bot size={20}/><span>助手</span></button>
           <button
             className={screen === "library" ? "nav-item active" : "nav-item"}
             onClick={() => setScreen("library")}
@@ -1987,6 +2062,21 @@ export default function App({ account, onAccount }) {
           </main>
         )}
       </div>
+      {assistantStarted && <Suspense fallback={<div className="toast">正在打开智能助手…</div>}><AssistantPanel
+        open={assistantOpen} onClose={() => setAssistantOpen(false)} models={models} modelId={modelId} setModelId={setModelId}
+        model={activeModel} apiKey={selectedKey} externallyBusy={busy} flush={flushAssistantSaves} reload={reload}
+        context={{ docId, docName: doc?.name, page, noteId: note?.id, selection: selectedQuote || highlight, rect: selectedRect }}
+        unlock={async phrase => { if (!activeModel) throw new Error('请先选择模型'); const key = await openVault(activeModel.encrypted, phrase); setKeys(current => ({ ...current, [activeModel.id]: key })); }}
+        navigate={assistantNavigate} feature={assistantFeature}
+        view={changes => {
+          if (changes.layout !== undefined) setLayout(changes.layout);
+          if (changes.zoom !== undefined) setZoom(changes.zoom);
+          if (changes.noteWidth !== undefined) setNoteWidth(changes.noteWidth);
+          if (changes.treeOpen !== undefined) setTreeOpen(changes.treeOpen);
+          if (changes.showStickies !== undefined) setShowStickies(changes.showStickies);
+          if (changes.stickyPlacement !== undefined) setStickyPlacement(changes.stickyPlacement);
+        }}
+      /></Suspense>}
       {dialog && (
         <div
           className="modal-backdrop"

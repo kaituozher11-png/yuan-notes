@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { ZipFile } from 'yazl';
 import { dataDir, getDataDir, currentUserId, runForUser, clearUserState, getState, mutate } from './store.js';
 import { importDocument, pdfPath, pageText } from './documents.js';
-import { callModel, generatePage } from './agent.js';
+import { callAssistant, callModel, generatePage } from './agent.js';
 import { validateMarkup } from './markup.js';
 import { createAuth } from './auth.js';
 import { createFolder, folderName, folderTarget } from '../src/libraryFolders.js';
@@ -249,7 +249,7 @@ app.post('/api/notes', async (req, res) => {
       const doc = currentDoc(s, req.body.docId); const page = Number(req.body.page);
       if (!doc || !Number.isInteger(page) || page < 1 || page > doc.pages) throw new Error('原文页不存在');
       const order = Math.max(0, ...s.notes.filter((n) => n.docId === doc.id && n.page === page && !n.deleted).map((n) => Number(n.order || 0))) + 1;
-      const note = { id: crypto.randomUUID(), docId: doc.id, page, order, title: String(req.body.title || '我的补充').slice(0, 100), kind: req.body.kind === 'ai' ? 'ai' : 'user', ai: null, blocks: [], links: [], status: 'new', deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      const note = { id: crypto.randomUUID(), docId: doc.id, page, order, title: String(req.body.title || '我的补充').slice(0, 100), kind: req.body.kind === 'ai' ? 'ai' : 'user', ai: req.body.ai || null, blocks: Array.isArray(req.body.blocks) ? req.body.blocks : [], links: Array.isArray(req.body.links) ? req.body.links : [], ...(req.body.style ? { style: req.body.style } : {}), status: 'new', deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       s.notes.push(note); return note;
     }); res.json(note);
   } catch (err) { error(res, err); }
@@ -287,13 +287,25 @@ app.put('/api/templates/:id', async (req, res) => {
 });
 app.delete('/api/templates/:id', async (req, res) => { await mutate((s) => { s.templates = s.templates.filter((t) => t.id !== req.params.id); }); res.json({ ok: true }); });
 app.post('/api/models/test', async (req, res) => { try { res.json(await callModel({ ...req.body, test: true })); } catch (err) { error(res, err); } });
+app.post('/api/assistant/turn', async (req, res) => {
+  const controller = new AbortController();
+  const disconnected = () => { if (!res.writableEnded) controller.abort(); };
+  res.on('close', disconnected);
+  try { res.json(await callAssistant({ ...req.body, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]) })); }
+  catch (err) { if (!controller.signal.aborted) error(res, err); }
+  finally { res.off('close', disconnected); }
+});
 app.post('/api/generate', async (req, res) => {
+  const controller = new AbortController();
+  const disconnected = () => { if (!res.writableEnded) controller.abort(); };
+  res.on('close', disconnected);
   try {
     const s = await getState(); const doc = currentDoc(s, req.body.docId); const page = Number(req.body.page);
     if (!doc || !Number.isInteger(page) || page < 1 || page > doc.pages) return res.status(404).json({ error: '原文页不存在' });
     const existing = s.notes.find((n) => n.docId === doc.id && n.page === page && n.kind === 'ai' && !n.deleted);
     if (existing && !req.body.preview) return res.status(409).json({ error: '本页已有智能笔记，请单页预览差异后确认替换' });
-    const ai = await generatePage({ ...req.body, page, signal: AbortSignal.timeout(120000) });
+    const ai = await generatePage({ ...req.body, page, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]) });
+    controller.signal.throwIfAborted();
     if (req.body.preview) {
       const token = crypto.randomUUID();
       pendingPreviews.set(token, { userId: currentUserId(), docId: doc.id, page, ai, createdAt: Date.now() });
@@ -305,7 +317,8 @@ app.post('/api/generate', async (req, res) => {
       item.ai = ai; item.status = 'done'; item.updatedAt = new Date().toISOString(); return item;
     });
     res.json(note);
-  } catch (err) { error(res, err); }
+  } catch (err) { if (!controller.signal.aborted) error(res, err); }
+  finally { res.off('close', disconnected); }
 });
 app.post('/api/generate/commit', async (req, res) => {
   const candidate = pendingPreviews.get(req.body.token);

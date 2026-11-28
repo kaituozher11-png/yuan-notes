@@ -66,6 +66,7 @@ test('public mode keeps accounts, files, notes and sessions separate', async (t)
   }
   assert.ok(ready, 'public server started');
   assert.equal((await request('/api/state')).status, 401);
+  assert.equal((await request('/api/assistant/turn', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401);
   assert.equal((await request('/api/auth/session')).body.mode, 'public');
 
   const register = (username, password) => request('/api/auth/register', {
@@ -83,6 +84,12 @@ test('public mode keeps accounts, files, notes and sessions separate', async (t)
   });
   assert.equal(localModel.status, 400);
   assert.match(localModel.body.error, /公网 HTTPS/);
+  const localAssistant = await request('/api/assistant/turn', {
+    cookie: a.cookie, method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ endpoint: 'https://127.0.0.1/v1', model: 'test', key: 'test-key', history: [{ role: 'user', content: '查看资料' }], context: {} }),
+  });
+  assert.equal(localAssistant.status, 400);
+  assert.match(localAssistant.body.error, /公网 HTTPS/);
   assert.equal((await request('/api/auth/register', { method: 'POST', verified: false, headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
   assert.equal((await request('/api/state', { cookie: a.cookie, headers: { Origin: 'https://foreign.example' } })).status, 403);
   const wrongHost = await new Promise((resolve, reject) => {

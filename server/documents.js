@@ -57,6 +57,9 @@ export async function importDocument(file) {
   const filename = decodeUploadFilename(file.originalname);
   const type = supported(filename);
   if (!type) throw new Error('仅支持 PDF、PPT/PPTX、Word/DOCX 文件');
+  if (!file.buffer?.length) throw new Error('文件为空，请选择有内容的资料文件');
+  if (file.buffer.length > 100 * 1024 * 1024) throw new Error('文件不能超过 100 MB');
+  if (type === 'PDF' && !file.buffer.subarray(0, 1024).includes(Buffer.from('%PDF-'))) throw new Error('文件不是有效的 PDF，请检查所选文件或重新导出为 PDF');
   const id = crypto.randomUUID();
   const dir = path.join(getDataDir(), 'documents', id);
   await fs.mkdir(dir, { recursive: true });
@@ -66,12 +69,19 @@ export async function importDocument(file) {
   try {
     if (type === 'PDF') await fs.copyFile(source, pdf);
     else await convertToPdf(source, pdf, dir, id, type);
-    const { stdout } = await runRequired(bin('pdfinfo'), [pdf], { timeout: 30000, windowsHide: true }, 'Poppler PDF 工具');
+    let stdout;
+    try { ({ stdout } = await runRequired(bin('pdfinfo'), [pdf], { timeout: 30000, windowsHide: true }, 'Poppler PDF 工具')); }
+    catch (error) {
+      if (error.code === 'MISSING_TOOL') throw error;
+      throw new Error(/password|encrypted/i.test(String(error.stderr || error.message))
+        ? 'PDF 需要密码，请先解除密码保护后导入'
+        : '无法解析 PDF，请确认文件完整，或重新导出为 PDF 后导入', { cause: error });
+    }
     const pages = Number(stdout.match(/^Pages:\s+(\d+)/m)?.[1]);
     if (!pages) throw new Error('无法读取文档页数');
     return { id, name: filename.replace(/\.[^.]+$/, ''), filename, type, pages, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), course: '', tags: [], deleted: false };
   } catch (error) {
-    await fs.rm(dir, { recursive: true, force: true });
+    if (path.dirname(path.resolve(dir)) === path.resolve(getDataDir(), 'documents')) await fs.rm(dir, { recursive: true, force: true });
     throw error;
   }
 }
