@@ -59,12 +59,12 @@ async function modelServiceError(response, key) {
   return new Error(`${status === 401 || status === 403 || status === 402 || status === 429 ? fallback : `模型服务返回错误 ${status}`}：${detail}`);
 }
 
-export async function requestChat({ endpoint, key, model, messages, maxTokens = 2200, signal, temperature = 0.2, jsonMode = false, assistant = false }) {
+export async function requestChat({ endpoint, key, model, messages, maxTokens = 2200, signal, temperature = 0.2, jsonMode = false, tools, toolChoice, assistant = false }) {
   const url = normalizeEndpoint(endpoint);
   if (!key || !model) throw new Error('请填写模型名称和 API 密钥');
   let response;
   try {
-    response = await fetch(url, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens, ...(jsonMode ? { response_format: { type: 'json_object' } } : {}) }), signal: signal || AbortSignal.timeout(120000), dispatcher: process.env.YINGXING_PUBLIC === '1' ? publicModelDispatcher() : modelDispatcher(url) });
+    response = await fetch(url, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens, ...(tools ? { tools, tool_choice: toolChoice } : jsonMode ? { response_format: { type: 'json_object' } } : {}) }), signal: signal || AbortSignal.timeout(120000), dispatcher: process.env.YINGXING_PUBLIC === '1' ? publicModelDispatcher() : modelDispatcher(url) });
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     if (error.name === 'TimeoutError') throw new Error('连接模型服务商超时，请检查网络或代理');

@@ -2,7 +2,7 @@ import { assistantTools } from './assistantProtocol.js';
 import { aiNotePresets, validateGenerationMode, validateAiGuidance, validateAiOutline } from './aiNoteOutline.js';
 import { freeNoteBlocks, partsToRich } from './richDocument.js';
 import { folderName, folderTarget } from './libraryFolders.js';
-import { SHAPES, autoLayout, mapDimensions, MAX_MAP_SIZE, normalizeMap, nodeSize, prepareGeneratedMindMap, styleMindMap } from './mindMapModel.js';
+import { SHAPES, autoLayout, mapDimensions, MAX_MAP_SIZE, normalizeMap, nodeSize, newNode, prepareGeneratedMindMap, styleMindMap } from './mindMapModel.js';
 import { validateMarkup } from '../server/markup.js';
 
 const uid = () => crypto.randomUUID();
@@ -40,19 +40,20 @@ function drawingOf(value) {
   });
 }
 
-function mapOf(part, limit = 100) {
+function mapOf(part, limit = 100, generated = false) {
   check(Array.isArray(part.nodes) && part.nodes.length > 0 && part.nodes.length <= limit, `思维导图须为1到${limit}个节点`);
   const ids = new Set();
   const nodes = part.nodes.map(node => {
     str(node.id, 80, '节点编号'); check(!ids.has(node.id), '节点编号重复'); ids.add(node.id);
-    str(node.text, 1000, '节点文字', true); check(SHAPES.includes(node.shape || 'rectangle')); number(node.x, 0, MAX_MAP_SIZE); number(node.y, 0, MAX_MAP_SIZE);
+    str(node.text, 1000, '节点文字', true); check(SHAPES.includes(node.shape || 'rectangle'));
+    const x = generated ? 0 : number(node.x, 0, MAX_MAP_SIZE), y = generated ? 0 : number(node.y, 0, MAX_MAP_SIZE);
     const appearance = {};
     for (const name of ['color', 'fill', 'textColor']) if (node[name] !== undefined) appearance[name] = color(node[name]);
     for (const [name, min, max] of [['width', 86, 640], ['height', 54, 1200], ['fontSize', 12, 28]]) if (node[name] !== undefined) appearance[name] = number(node[name], min, max);
     for (const name of ['bold', 'collapsed']) if (node[name] !== undefined) { check(typeof node[name] === 'boolean'); appearance[name] = node[name]; }
     const size = nodeSize(node);
-    check(node.x + size.width <= MAX_MAP_SIZE - 12 && node.y + size.height <= MAX_MAP_SIZE - 12, '节点超出画布边界');
-    return { ...node, id: node.id, text: node.text, shape: node.shape || 'rectangle', ...appearance };
+    check(x + size.width <= MAX_MAP_SIZE - 12 && y + size.height <= MAX_MAP_SIZE - 12, '节点超出画布边界');
+    return { ...node, id: node.id, text: node.text, x, y, shape: node.shape || 'rectangle', ...appearance };
   });
   check(part.edges === undefined || Array.isArray(part.edges));
   check((part.edges || []).length <= (limit === 100 ? 300 : 1500), '连线过多');
@@ -69,13 +70,13 @@ function mapOf(part, limit = 100) {
   return { nodes, edges, ...mapDimensions({ nodes, width: part.width, height: part.height }) };
 }
 
-function partOf(part, env) {
+function partOf(part, env, generated = false) {
   check(object(part));
   const id = part.id || uid();
   if (part.type === 'text' || part.type === 'formula') return { id, type: part.type, text: str(part.text, 20000, '内容', true) };
   if (part.type === 'image') return { id, type: 'image', data: imageSource(part.data, env), text: str(part.text || '', 500, '图片说明', true), width: number(part.width ?? 100, 20, 100), align: ['left', 'center', 'right'].includes(part.align) ? part.align : 'left' };
   if (part.type === 'drawing') return { id, type: 'drawing', strokes: drawingOf(part.strokes || []), height: number(part.height || 420, 420, 3300) };
-  if (part.type === 'mindmap') return { id, type: 'mindmap', ...mapOf(part) };
+  if (part.type === 'mindmap') return { id, type: 'mindmap', ...mapOf(part, 100, generated) };
   throw new Error('不支持的笔记内容类型');
 }
 
@@ -106,7 +107,7 @@ function blockOf(block, env, id) {
 
 function appendParts(blocks, parts, env) {
   check(Array.isArray(parts) && parts.length > 0 && parts.length <= 100, '请提供1到100项内容');
-  return freeNoteBlocks([...blocks, ...parts.map(part => { const block = partOf(part, env); return block.type === 'mindmap' ? { ...block, ...prepareGeneratedMindMap(block) } : block; })]);
+  return freeNoteBlocks([...blocks, ...parts.map(part => { const block = partOf(part, env, true); return block.type === 'mindmap' ? { ...block, ...prepareGeneratedMindMap(block) } : block; })]);
 }
 
 const docInfo = doc => ({ id: doc.id, name: doc.name, course: doc.course, pages: doc.pages, folderId: doc.folderId || null, deleted: !!doc.deleted });
@@ -286,7 +287,16 @@ export async function prepareAssistantTool(tool, env) {
         for (const patch of patches) lookup.set(patch.id, { ...lookup.get(patch.id), ...patch });
         return [...lookup.values()];
       };
-      const nextNodes = merge(map.nodes, nodes, removeNodes);
+      const placed = [...map.nodes];
+      const additions = nodes.map(patch => {
+        if (map.nodes.some(node => node.id === patch.id)) return patch;
+        const fallback = newNode(placed, patch.id, patch.shape || 'rectangle', map);
+        const next = { shape: 'rectangle', ...patch,
+          x: Number.isFinite(patch.x) && patch.x >= 0 ? patch.x : fallback.x,
+          y: Number.isFinite(patch.y) && patch.y >= 0 ? patch.y : fallback.y };
+        placed.push(next); return next;
+      });
+      const nextNodes = merge(map.nodes, additions, removeNodes);
       const nextEdges = merge(map.edges.filter(edge => !removeNodes.has(edge.from) && !removeNodes.has(edge.to)), edges, removeEdges);
       const next = mapOf({ ...map, nodes: nextNodes, edges: nextEdges }, 500);
       return task(`修改“${note.title}”中的${nodes.length}个节点、${edges.length}条连线${removeNodes.size || removeEdges.size ? '并删除所选对象' : ''}`, saveNote(note, { blocks: note.blocks.map(item => item.id === block.id ? { ...block, ...next } : item) }), true);

@@ -217,7 +217,7 @@ test('assistant incrementally edits large maps without dropping untouched conten
   await f.execute('edit_mindmap', { noteId: 'note1', blockId: 'map', nodes: [{ id: 'new', text: '新增', x: 900, y: 600, shape: 'circle' }], edges: [{ id: 'new-edge', from: 'n0', to: 'new' }], removeNodes: ['n1'] });
   current = f.state.notes[0].blocks[1]; assert.equal(current.nodes.length, 150); assert.equal(current.edges.length, 1); assert.equal(current.edges[0].id, 'new-edge');
   const invalid = [
-    { nodes: [{ id: 'new', collapsed: 'yes' }] }, { nodes: [{ id: 'bad', text: '缺位置' }] },
+    { nodes: [{ id: 'new', collapsed: 'yes' }] }, { nodes: [{ id: 'bad', x: 0, y: 0 }] },
     { nodes: [{ id: 'new', x: 32000 }] }, { nodes: [{ id: 'new' }, { id: 'new' }] },
     { edges: [{ id: 'bad', from: 'n0', to: 'missing' }] }, { removeNodes: ['missing'] },
     { nodes: [{ id: 'new', text: '矛盾' }], removeNodes: ['new'] }, { edges: [{ id: 'new-edge', from: 'n0', to: 'n0' }] },
@@ -287,4 +287,17 @@ test('assistant selects adaptive generation unless user requests a template and 
   await f.execute('generate_notes', { docId: 'doc1', pages: [3] }); assert.equal(f.writes.filter(w => w[0] === '/generate').at(-1)[2].mode, 'adaptive');
   await f.execute('preview_generation', { docId: 'doc1', page: 1, mode: 'adaptive' }); assert.equal(f.writes.filter(w => w[0] === '/generate').at(-1)[2].mode, 'adaptive');
   const count = f.writes.length; await assert.rejects(f.execute('generate_notes', { docId: 'doc1', pages: [1], mode: 'unknown' })); assert.equal(f.writes.length, count);
+});
+
+test('new mind maps ignore missing, negative and excessive model coordinates but existing node moves stay validated', async () => {
+  const f = fixture();
+  await f.execute('append_content', { noteId: 'note1', parts: [{ type: 'mindmap', nodes: [
+    { id: 'root', text: '主题', x: -2000, y: -100 }, { id: 'child', text: '要点' }, { id: 'other', text: '结论', x: 9999999, y: 'bad' },
+  ], edges: [{ id: 'e1', from: 'root', to: 'child' }, { id: 'e2', from: 'root', to: 'other' }] }] });
+  let graph = f.state.notes[0].blocks.find(b => b.type === 'mindmap');
+  assert.equal(graph.nodes.length, 3); assert.ok(graph.nodes.every(n => n.x >= 0 && n.y >= 0 && n.x < 32000));
+  await f.execute('edit_mindmap', { noteId: 'note1', blockId: graph.id, nodes: [{ id: 'new', text: '新节点不需要坐标' }], edges: [{ id: 'e3', from: 'child', to: 'new' }] });
+  graph = f.state.notes[0].blocks.find(b => b.type === 'mindmap'); assert.equal(graph.nodes.length, 4); assert.ok(graph.nodes.find(n => n.id === 'new').x >= 0);
+  await assert.rejects(f.execute('edit_mindmap', { noteId: 'note1', blockId: graph.id, nodes: [{ id: 'root', x: -1 }] }), /范围/);
+  await assert.rejects(f.execute('append_content', { noteId: 'note1', parts: [{ type: 'mindmap', nodes: [{ id: 'r', text: '主题' }], edges: [{ from: 'r', to: 'missing' }] }] }));
 });

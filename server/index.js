@@ -63,7 +63,7 @@ app.use('/api', (req, res, next) => {
 app.use(express.json({ limit: '12mb' }));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 const imageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
-const error = (res, err) => res.status(400).json({ error: err.message || '操作失败' });
+const error = (res, err) => res.status(400).json({ error: err.message || '操作失败', ...(['ASSISTANT_FORMAT', 'ASSISTANT_TRUNCATED'].includes(err.code) ? { code: err.code } : {}) });
 const currentDoc = (state, id) => state.docs.find((doc) => doc.id === id && !doc.deleted);
 const pendingPreviews = new Map();
 

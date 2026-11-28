@@ -35,7 +35,7 @@ test('assistant repairs only an invalid decision with original tool results and 
   const request = { ...input, history: [...input.history, { role: 'assistant', content: JSON.stringify(tool('read_page', { docId: 'ppt', page: 1 })) }, { role: 'user', content: observed }] };
   let calls = 0;
   const fixed = await requestAssistantTurn(request, async ({ messages, jsonMode }) => {
-    assert.equal(jsonMode, true); calls++;
+    calls++; assert.equal(jsonMode, calls === 1);
     assert.ok(messages.some(item => item.content === observed), 'the completed read must stay in context');
     if (calls === 1) return choice('{"reply":"继续", "tool":');
     assert.match(messages.at(-1).content, /没有执行任何操作/);
@@ -156,4 +156,61 @@ test('assistant pauses for manual file selection and resumes with the completed 
   assert.equal(checkpoint.observations[0].tool, 'open_feature');
   const finished = await runAssistantTask({ ...base, state: checkpoint, ask: async ({ history }) => { assert.ok(history.at(-1).content.includes('requiresUserInteraction')); return { reply: '已看到新资料，继续处理', tool: null }; } });
   assert.equal(finished.reply, '已看到新资料，继续处理');
+});
+
+test('native action envelope and stringified parameters normalize only a single supported decision', () => {
+  const next = tool('append_content', { noteId: 'n1', parts: [{ type: 'formula', text: '\\frac{x}{y} + \\alpha' }] });
+  assert.deepEqual(parseAssistantChoice({ finish_reason: 'tool_calls', message: { content: null, tool_calls: [{ function: { name: 'yuan_notes_action', arguments: JSON.stringify(next) } }] } }), next);
+  assert.deepEqual(parseAssistantTurn(JSON.stringify({ reply: '', tool: { name: 'read_note', arguments: JSON.stringify({ noteId: 'n1' }) } })), tool('read_note', { noteId: 'n1' }));
+  assert.deepEqual(parseAssistantTurn(JSON.stringify({ reply: '', tool: { name: 'read_note', args: JSON.stringify({ noteId: 'n1' }) } })), tool('read_note', { noteId: 'n1' }));
+  assert.throws(() => parseAssistantChoice({ message: { tool_calls: [{ function: { name: 'yuan_notes_action', arguments: JSON.stringify({ reply: '', tool: { name: 'shell', args: {} } }) } }] } }), /不支持/);
+  assert.throws(() => parseAssistantChoice({ message: { tool_calls: [{ function: { name: 'yuan_notes_action', arguments: '[{},{}]' } }] } }), /格式/);
+  assert.throws(() => parseAssistantTurn('{"reply":"不要猜测操作"}'), /格式/);
+  assert.throws(() => parseAssistantTurn('{"reply":"a","tool":null}{"reply":"b","tool":null}'), /冲突/);
+});
+
+test('format repair switches to constrained native output without copying invalid drafts into successful history', async () => {
+  const modes = []; const draft = 'INVALID_DRAFT_MUST_NOT_BECOME_HISTORY';
+  const result = await requestAssistantTurn(input, async options => {
+    modes.push(options);
+    if (modes.length === 1) return choice(draft);
+    assert.equal(options.jsonMode, false); assert.equal(options.tools[0].function.name, 'yuan_notes_action'); assert.equal(options.toolChoice.function.name, 'yuan_notes_action');
+    assert.ok(options.tools[0].function.parameters.properties.tool.anyOf[1].properties.name.enum.includes('append_content'));
+    assert.ok(!JSON.stringify(options.messages).includes(draft));
+    return { message: { tool_calls: [{ function: { name: 'yuan_notes_action', arguments: JSON.stringify(tool('search', { query: '论文' })) } }] }, finish_reason: 'tool_calls' };
+  }); assert.equal(modes.length, 2); assert.equal(result.tool.name, 'search');
+});
+
+test('native output rejection falls back within a bounded budget and auth failures are never retried', async () => {
+  const calls = [];
+  const result = await requestAssistantTurn(input, async options => {
+    calls.push({ native: !!options.tools, json: options.jsonMode });
+    if (calls.length === 1) return choice('not JSON');
+    if (options.tools) throw Error('模型服务返回错误 422: tools/tool_choice unsupported');
+    return choice(tool('search', { query: '' }));
+  }); assert.equal(result.tool.name, 'search'); assert.deepEqual(calls, [{ native: false, json: true }, { native: true, json: false }, { native: false, json: true }]);
+  let n = 0; await assert.rejects(requestAssistantTurn(input, async () => { n++; throw Error('401 密钥无效'); }), /401/); assert.equal(n, 1);
+  n = 0; await assert.rejects(requestAssistantTurn(input, async () => { n++; return { ...choice('{}'), finish_reason: 'length' }; }), e => e.code === 'ASSISTANT_TRUNCATED' && e.message.includes('被截断')); assert.equal(n, 3);
+});
+
+test('resume after a bad reply adds recovery context and coordinate-only retries cannot duplicate a saved map', async () => {
+  const state = { docs: [{ id: 'ppt', name: '论文', pages: 1 }], notes: [], folders: [], templates: [] }; let checkpoint, writes = 0, reads = 0;
+  const env = { api: async (path, options = {}) => { if (path === '/state') return structuredClone(state); if (path.endsWith('/text')) { reads++; return { text: '原文' }; } if (path === '/notes') { writes++; const note = { id: 'note', ...JSON.parse(options.body) }; state.notes.push(note); return note; } } };
+  const base = { history: [{ role: 'user', content: '阅读当前页并创建导图' }], context: async () => ({}), env, confirm: async () => true, emit: () => {}, refresh: async () => {}, onCheckpoint: value => checkpoint = value };
+  let round = 0;
+  await assert.rejects(runAssistantTask({ ...base, ask: async () => { if (++round === 1) return tool('read_page', { docId: 'ppt', page: 1 }); throw Object.assign(Error('模型回复被截断'), { code: 'ASSISTANT_TRUNCATED' }); } }));
+  assert.match(checkpoint.retryGuidance, /被截断/); assert.equal(checkpoint.observations.length, 1);
+  const graph = { type: 'mindmap', nodes: [{ id: 'root', text: '主题', x: -100, y: -50 }], edges: [] }; round = 0;
+  const result = await runAssistantTask({ ...base, state: checkpoint, ask: async ({ history }) => {
+    if (++round === 1) { assert.match(history.at(-1).content, /缩短单次内容/); return tool('create_note', { docId: 'ppt', page: 1, title: '导图', parts: [graph] }); }
+    if (round === 2) return tool('create_note', { docId: 'ppt', page: 1, title: '导图', parts: [{ ...graph, nodes: [{ id: 'root', text: '主题', shape: 'rectangle', x: 300, y: 50 }] }] });
+    return { reply: '完成', tool: null };
+  } }); assert.equal(writes, 1); assert.equal(reads, 1); assert.equal(result.observations.at(-1).ok, false);
+  assert.ok(state.notes[0].blocks[0].nodes[0].x >= 0);
+});
+
+test('every failed operation including the third is checkpointed for a later resume', async () => {
+  const library = { docs: [], notes: [], folders: [], templates: [] }; let saved;
+  await assert.rejects(runAssistantTask({ history: [{ role: 'user', content: '处理资料' }], context: async () => ({}), env: { api: async () => library }, confirm: async () => true, emit: () => {}, refresh: async () => {}, onCheckpoint: value => saved = value, ask: async () => tool('read_note', { noteId: 'missing' }) }), /三次/);
+  assert.equal(saved.observations.length, 3); assert.ok(saved.observations.every(o => !o.ok)); assert.match(saved.transcript.at(-1).content, /笔记不存在/);
 });

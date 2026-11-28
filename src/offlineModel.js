@@ -50,10 +50,10 @@ function nativeRequest(url, payload, key, signal) {
 export async function callOfflineAssistant(input) {
   if (!modelOnline()) throw new Error('智能助手需要联网，请联网后重试');
   if (!input.key || !input.model) throw new Error('请先选择并解锁模型连接');
-  return requestAssistantTurn(input, async ({ messages, jsonMode }) => {
+  return requestAssistantTurn(input, async ({ messages, jsonMode, tools, toolChoice }) => {
     const response = await nativeRequest(normalizeModelEndpoint(input.endpoint), {
       model: input.model, messages, temperature: 0.2, max_tokens: 6000,
-      ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+      ...(tools ? { tools, tool_choice: toolChoice } : jsonMode ? { response_format: { type: 'json_object' } } : {}),
     }, input.key, input.signal);
     input.signal?.throwIfAborted();
     if (response.status !== 200) throw serviceError(response.status, response.body.slice(0, maxResponse), input.key);

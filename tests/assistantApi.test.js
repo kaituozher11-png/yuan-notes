@@ -95,3 +95,36 @@ test('adaptive API preview preserves old AI and personal work until explicit com
   const old = (await api('/state')).value.notes[0], preview = await api('/generate', post({ ...input, preview: true })); assert.equal(preview.status, 200); assert.deepEqual((await api('/state')).value.notes[0], old);
   const committed = await api('/generate/commit', post({ token: preview.value.token })); assert.equal(committed.status, 200); assert.equal(committed.value.blocks[0].text, '个人推导保留');
 });
+
+test('real API resumes two screenshot failures, uses native repair and creates one coordinate-free map after all ten pages are read', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'yuan-agent-dual-fix-'));
+  const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '']; const kids = [];
+  for (let page = 1; page <= 10; page++) { const id = objects.length + 1, stream = `BT /F1 14 Tf 40 740 Td (Page ${page}: signal model method and evidence) Tj ET\n`; kids.push(`${id} 0 R`); objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents ${id + 1} 0 R >>`, `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}endstream`); }
+  objects[1] = `<< /Type /Pages /Kids [${kids.join(' ')}] /Count 10 >>`; let pdf = '%PDF-1.4\n'; const offsets = [0]; objects.forEach((obj, i) => { offsets.push(Buffer.byteLength(pdf)); pdf += `${i + 1} 0 obj\n${obj}\nendobj\n`; }); const xref = Buffer.byteLength(pdf); pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map(n => String(n).padStart(10, '0') + ' 00000 n \n').join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  let wire = 0, docId, noteId;
+  const graph = { type: 'mindmap', nodes: [{ id: 'root', text: '研究逻辑', x: -300, y: -100 }, { id: 'method', text: '信号建模与方法' }, { id: 'evidence', text: '实验依据与结论' }], edges: [{ id: 'rm', from: 'root', to: 'method' }, { id: 'me', from: 'method', to: 'evidence' }] };
+  const provider = http.createServer(async (req, res) => {
+    let raw = ''; for await (const c of req) raw += c; const payload = JSON.parse(raw); wire++; const turn = (name, args) => ({ reply: '继续原任务', tool: { name, args } }); let response;
+    if (wire === 1) response = { content: JSON.stringify(turn('read_pages', { docId, pages: [1,2,3,4,5] })) };
+    if (wire === 2) response = { content: JSON.stringify(turn('read_pages', { docId, pages: [6,7,8,9,10] })) };
+    if (wire === 3) response = { content: JSON.stringify(turn('read_note', { noteId })) };
+    if (wire >= 4 && wire <= 6) response = { content: '{"reply":"新增导图","tool":' };
+    if (wire === 7) { assert.match(JSON.stringify(payload.messages), /继续原任务，上一步未执行/); response = { content: '请继续' }; }
+    if (wire === 8) { assert.equal(payload.tools[0].function.name, 'yuan_notes_action'); assert.ok(!JSON.stringify(payload.messages).includes('请继续"'), 'invalid draft must not be copied as successful context'); response = { content: null, tool_calls: [{ function: { name: 'yuan_notes_action', arguments: JSON.stringify(turn('append_content', { noteId, parts: [graph] })) } }] }; }
+    if (wire === 9) response = { content: JSON.stringify(turn('append_content', { noteId, parts: [{ ...graph, nodes: graph.nodes.map(n => ({ ...n, x: 120, y: 240, shape: 'rectangle' })) }] })) };
+    if (wire === 10) response = { content: JSON.stringify({ reply: '导图已保存一次，原笔记保留', tool: null }) };
+    assert.ok(response); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ choices: [{ finish_reason: response.tool_calls ? 'tool_calls' : 'stop', message: response }] }));
+  }); await new Promise(r => provider.listen(0, '127.0.0.1', r));
+  const child = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: '0', YINGXING_DATA_DIR: directory }, stdio: ['ignore','pipe','pipe'], windowsHide: true });
+  t.after(async () => { provider.close(); const stopped = new Promise(r => child.once('exit', r)); child.kill(); await stopped; await rm(directory, { recursive: true, force: true }); });
+  const base = await new Promise((resolve, reject) => { let out = ''; const timer = setTimeout(() => reject(Error('server timeout')), 15000); child.stdout.on('data', c => { out += c; const m = out.match(/http:\/\/127\.0\.0\.1:\d+/); if (m) { clearTimeout(timer); resolve(m[0]); } }); });
+  let reads = 0, edits = 0;
+  const api = async (route, options = {}) => { if (route.endsWith('/text')) reads++; if (route.startsWith('/notes/') && options.method === 'PUT') edits++; const r = await fetch(base + '/api' + route, { ...options, headers: options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' } }); const value = await r.json(); if (!r.ok) throw Object.assign(Error(value.error), { code: value.code }); return value; };
+  const form = new FormData(); form.append('file', new Blob([pdf], { type: 'application/pdf' }), 'ten-pages.pdf'); const doc = await api('/docs', { method: 'POST', body: form }); docId = doc.id; assert.equal(doc.pages, 10);
+  const ai = { sections: [{ title: '研究重点', content: '原有智能笔记，不应覆盖' }] }; const note = await api('/notes', { method: 'POST', body: JSON.stringify({ docId, page: 1, title: '第1页智能笔记', kind: 'ai', ai, blocks: [{ id: 'personal', type: 'text', text: '用户的手写推导说明' }] }) }); noteId = note.id;
+  const model = { endpoint: `http://127.0.0.1:${provider.address().port}/v1`, model: 'mock', key: 'dummy' }; let saved;
+  const settings = { history: [{ role: 'user', content: '读取全篇10页论文，在已有智能笔记下新增一张思维导图' }], context: async () => assistantContext(await api('/state'), { docId, page: 1, noteId }), env: { api }, ask: value => api('/assistant/turn', { method: 'POST', body: JSON.stringify({ ...model, ...value }) }), confirm: async () => true, emit: () => {}, refresh: async () => {}, onCheckpoint: value => saved = value };
+  await assert.rejects(runAssistantTask(settings), e => e.code === 'ASSISTANT_FORMAT'); assert.equal(reads, 10); assert.equal(edits, 0); assert.equal(saved.observations.length, 3);
+  const done = await runAssistantTask({ ...settings, state: saved }); assert.equal(wire, 10); assert.equal(reads, 10); assert.equal(edits, 1); assert.equal(done.observations.at(-1).ok, false);
+  const persisted = (await api('/state')).notes.find(n => n.id === noteId); assert.deepEqual(persisted.ai, ai); assert.match(JSON.stringify(persisted.blocks), /用户的手写推导说明/); const maps = persisted.blocks.filter(b => b.type === 'mindmap'); assert.equal(maps.length, 1); assert.equal(maps[0].nodes.length, 3); assert.ok(maps[0].nodes.every(n => n.x >= 0 && n.y >= 0));
+});

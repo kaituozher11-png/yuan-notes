@@ -10,7 +10,7 @@
 
 ![原文和笔记同屏查看](docs/项目介绍/images/02-原文与智能笔记.png)
 
-> 当前提供的是预览/测试版本：Windows **0.3.2**，Android **0.4.2-offline**。**尚无官方公共网页版网址、iOS 安装包或应用商店版本。** GitHub 页面用于介绍项目、下载软件和获取源码；下载页中的 “Source code” 压缩包不是安装包。
+> 当前提供的是预览/测试版本：Windows **0.3.3**，Android **0.4.3-offline**。**尚无官方公共网页版网址、iOS 安装包或应用商店版本。** GitHub 页面用于介绍项目、下载软件和获取源码；下载页中的 “Source code” 压缩包不是安装包。
 
 ## 下载与安装
 
@@ -18,16 +18,16 @@
 
 | 使用设备 | 下载或运行入口 | 支持导入 | 使用条件 |
 | --- | --- | --- | --- |
-| Windows 10/11 x64 电脑 | [下载安装包 .exe](https://github.com/kaituozher11-png/yuan-notes/releases/download/preview-2026-11-28-model-delete/YuanNotes-Windows-Setup-0.3.2.exe) | PDF、Word/DOCX、PPT/PPTX；单文件不超过 100 MB | 另装 Poppler；Word/PPT 还需转换工具，见下文 |
-| Android 8.0 及以上手机、平板 | [下载离线测试 APK](https://github.com/kaituozher11-png/yuan-notes/releases/download/preview-2026-11-28-model-delete/YuanNotes-Android-offline-0.4.2.apk) | PDF；单文件不超过 100 MB | 本地阅读和编辑无需连接电脑或同一 Wi-Fi |
+| Windows 10/11 x64 电脑 | [下载安装包 .exe](https://github.com/kaituozher11-png/yuan-notes/releases/download/preview-2026-11-28-agent-compat/YuanNotes-Windows-Setup-0.3.3.exe) | PDF、Word/DOCX、PPT/PPTX；单文件不超过 100 MB | 另装 Poppler；Word/PPT 还需转换工具，见下文 |
+| Android 8.0 及以上手机、平板 | [下载离线测试 APK](https://github.com/kaituozher11-png/yuan-notes/releases/download/preview-2026-11-28-agent-compat/YuanNotes-Android-offline-0.4.3.apk) | PDF；单文件不超过 100 MB | 本地阅读和编辑无需连接电脑或同一 Wi-Fi |
 | 本机网页版 | [按源码运行步骤启动](#从源码运行网页版) | 与桌面服务相同 | Node.js 24+；浏览器打开本机地址，服务需保持运行 |
 | 自行部署的多用户网页版 | [部署说明](docs/网页版部署说明.md) | 由服务器提供文档转换 | 需要自行配置服务器和 HTTPS，当前没有官方托管服务 |
 
-[完整发布页](https://github.com/kaituozher11-png/yuan-notes/releases/tag/preview-2026-11-28-model-delete)包含 Windows 安装包、Android APK 和 SHA256 校验文件。[全部历史版本](https://github.com/kaituozher11-png/yuan-notes/releases)可用于查看更新记录。macOS、Linux 和 iOS 暂未提供安装包。
+[完整发布页](https://github.com/kaituozher11-png/yuan-notes/releases/tag/preview-2026-11-28-agent-compat)包含 Windows 安装包、Android APK 和 SHA256 校验文件。[全部历史版本](https://github.com/kaituozher11-png/yuan-notes/releases)可用于查看更新记录。macOS、Linux 和 iOS 暂未提供安装包。
 
 ### Windows 安装
 
-1. 下载 `YuanNotes-Windows-Setup-0.3.2.exe`，运行安装程序并选择安装位置。安装后从开始菜单打开“源笔记”。普通用户使用安装包不需要先装 Node.js。
+1. 下载 `YuanNotes-Windows-Setup-0.3.3.exe`，运行安装程序并选择安装位置。安装后从开始菜单打开“源笔记”。普通用户使用安装包不需要先装 Node.js。
 2. 安装 [Poppler for Windows](https://github.com/oschwartz10612/poppler-windows/releases)，把含 `pdfinfo.exe`、`pdftotext.exe`、`pdftoppm.exe` 的文件夹加入用户 `Path`，再重新打开源笔记。这是第三方维护的 Windows 发行版；本项目没有内置这些工具。
 3. 导入 Word/PPT 时，再安装 [LibreOffice](https://www.libreoffice.org/download/download-libreoffice/)，确保 `soffice.com` 可用。Windows 的 Word 文档还会优先尝试使用已安装的 Microsoft Word；PDF 不需要安装 Office。
 4. 先导入一份小 PDF 检查翻页、图片和保存；复杂 Word、MathType 公式或课件建议先自行导出 PDF，检查无误后导入。
@@ -36,7 +36,7 @@
 
 ### Android 安装
 
-1. 下载 `YuanNotes-Android-offline-0.4.2.apk`，在手机或平板的文件管理器中点击安装。系统询问时，为本次使用的浏览器或文件管理器允许安装此来源的应用。
+1. 下载 `YuanNotes-Android-offline-0.4.3.apk`，在手机或平板的文件管理器中点击安装。系统询问时，为本次使用的浏览器或文件管理器允许安装此来源的应用。
 2. 打开源笔记即可导入 PDF 和记笔记，不需要连接电脑、输入电脑地址或加入特定 Wi-Fi。Word/PPT 请先转换为 PDF。
 3. 从本项目旧测试版升级时，**先备份，再覆盖安装**。当前 APK 沿用测试签名；若提示无法安装，先核对设备版本和已有应用来源，切勿为尝试安装而直接卸载含有重要资料的旧版。
 
@@ -131,6 +131,8 @@ APK 是测试构建，尚未在所有厂商设备和实体平板上验证。Andr
 - “给导图加一个圆形实验节点，在连线上写验证，向右自动排版。”
 - “隐藏当前页的便利贴，然后导出这份资料的笔记。”
 
+新建导图可只提供节点与关系，坐标由软件排版。回复格式错误会尝试结构化工具调用，继续任务带上失败原因，已成功写入不重复提交。
+
 助手会显示执行记录，可停止；格式错误可自动尝试修复，失败后可在当前会话“继续任务”。修改已有内容等操作会要求确认，发现笔记已变化时阻止旧内容写入。需要选择文件、输入密钥或点击下载时，会交给用户完成。**打开某个工具入口不代表已自动完成该操作，也不能保证任意模型都能正确理解所有指令。**
 
 助手未明确要求模板时采用按内容组织；制作导图先读取指定范围，按知识逻辑梳理短语和分支，新图自动应用紧凑布局及分支配色。已有图可点击“紧凑美化”，可撤销；不会自动重写旧笔记。
@@ -197,7 +199,7 @@ npm run build   # 生产网页构建
 - 文档转换无法保证复杂 Word、MathType 公式、编号或特殊字体完全复现；高保真需求建议先在原软件导出 PDF。
 - 无通用 OCR；无原件 Word/PPT 编辑、自动云同步、实时协作、竞品导图原生格式兼容。
 - Windows 安装包未在所有全新系统环境验收；手机/平板界面经过浏览器尺寸和触摸事件检查，不能替代实体设备测试。
-- 当前功能版本有 **95 项自动测试通过**，完成浏览器、离线存储、备份恢复及打包 Windows 检查；AI 链路使用模拟服务验证，未据此承诺所有真实服务商表现一致。
+- 当前功能版本有 **102 项自动测试通过**，完成浏览器、离线存储、备份恢复及打包 Windows 检查；AI 链路使用模拟服务验证，未据此承诺所有真实服务商表现一致。
 
 详细检查范围见[本次验收记录](docs/自适应笔记与紧凑导图验收_2026-11-28.md)。遇到问题可先看[常见问题与注意事项](docs/常见问题与注意事项.md)。
 
@@ -216,4 +218,4 @@ npm run build   # 生产网页构建
 
 在 [GitHub Issues](https://github.com/kaituozher11-png/yuan-notes/issues) 提交问题或建议。请说明设备/系统、应用版本、文件类型、操作步骤、预期结果和实际情况，并附不含敏感信息的截图；可复现样例更有助于定位。不要公开 API 密钥、保护口令、登录密码或他人资料。
 
-本页对应 Windows 0.3.2 / Android 0.4.2-offline；旧截图和归档材料的外观可能与当前版本不同，功能和安装说明以本页及当前 Markdown 指南为准。
+本页对应 Windows 0.3.3 / Android 0.4.3-offline；旧截图和归档材料的外观可能与当前版本不同，功能和安装说明以本页及当前 Markdown 指南为准。
