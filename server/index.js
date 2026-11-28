@@ -304,7 +304,7 @@ app.post('/api/generate', async (req, res) => {
     if (!doc || !Number.isInteger(page) || page < 1 || page > doc.pages) return res.status(404).json({ error: '原文页不存在' });
     const existing = s.notes.find((n) => n.docId === doc.id && n.page === page && n.kind === 'ai' && !n.deleted);
     if (existing && !req.body.preview) return res.status(409).json({ error: '本页已有智能笔记，请单页预览差异后确认替换' });
-    const ai = await generatePage({ ...req.body, page, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]) });
+    const ai = await generatePage({ ...req.body, page, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(req.body.mode === 'adaptive' ? 240000 : 120000)]) });
     controller.signal.throwIfAborted();
     if (req.body.preview) {
       const token = crypto.randomUUID();

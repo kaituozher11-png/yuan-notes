@@ -562,8 +562,8 @@ export default function App({ account, onAccount }) {
   const [aiOutline, setAiOutline] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(`yingxing.ai-outline.${account?.id || 'local'}`));
-      return { preset: saved.preset, titles: validateAiOutline(saved.titles), guidance: validateAiGuidance(saved.guidance || '') };
-    } catch { return { preset: 'course', titles: [...aiNotePresets.course.titles], guidance: '' }; }
+      return { mode: saved.mode === 'adaptive' ? 'adaptive' : 'template', preset: saved.preset, titles: validateAiOutline(saved.titles), guidance: validateAiGuidance(saved.guidance || '') };
+    } catch { return { mode: 'adaptive', preset: 'course', titles: [...aiNotePresets.course.titles], guidance: '' }; }
   });
   const [progress, setProgress] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -1087,7 +1087,8 @@ export default function App({ account, onAccount }) {
       if (window.YuanOfflineApp && !modelOnline()) throw new Error('无法生成智能笔记，请联网');
       if (!activeModel || !selectedKey)
         throw new Error("请先在模型连接页配置并解锁 API");
-      const outline = validateAiOutline(aiOutline.titles);
+      const mode = aiOutline.mode;
+      const outline = mode === 'template' ? validateAiOutline(aiOutline.titles) : undefined;
       const guidance = validateAiGuidance(aiOutline.guidance);
       await flushSaves();
       const pages = pagesToGenerate();
@@ -1114,6 +1115,7 @@ export default function App({ account, onAccount }) {
             key: selectedKey,
             vision: activeModel.vision,
             outline,
+            mode,
             guidance,
             preview: true,
           }),
@@ -1157,6 +1159,7 @@ export default function App({ account, onAccount }) {
               key: selectedKey,
               vision: activeModel.vision,
               outline,
+              mode,
               guidance,
             }),
           );
@@ -2266,6 +2269,12 @@ export default function App({ account, onAccount }) {
                       </label>
                     )}
                     <div className="ai-outline-editor">
+                      <strong>笔记组织方式</strong>
+                      <div className="ai-preset-switch" role="group" aria-label="笔记组织方式">
+                        <button type="button" aria-pressed={aiOutline.mode === 'adaptive'} className={aiOutline.mode === 'adaptive' ? 'active' : ''} disabled={busy} onClick={() => setAiOutline(current => ({ ...current, mode: 'adaptive' }))}>不使用模板 · 按内容组织</button>
+                        <button type="button" aria-pressed={aiOutline.mode === 'template'} className={aiOutline.mode === 'template' ? 'active' : ''} disabled={busy} onClick={() => setAiOutline(current => ({ ...current, mode: 'template' }))}>使用模板 · 自定标题</button>
+                      </div>
+                      {aiOutline.mode === 'adaptive' ? <p className="ai-mode-description">先阅读每页内容，分别拟定适合本页的标题，再生成笔记。概念、推导、实验、封面等页面按实际内容组织，不强行套用同一结构。每页需要两次模型请求，耗时和用量可能增加；下方仍可填写关注点。</p> : <>
                       <strong>智能笔记模板</strong>
                       <div className="ai-preset-switch" role="group" aria-label="智能笔记模板">
                         {Object.entries(aiNotePresets).map(([key, preset]) => (
@@ -2291,6 +2300,7 @@ export default function App({ account, onAccount }) {
                       </div>
                       <button type="button" className="secondary-button ai-outline-add" disabled={busy || aiOutline.titles.length >= 12}
                         onClick={() => setAiOutline((current) => ({ ...current, titles: [...current.titles, ''] }))}><Plus size={15} /> 添加标题</button>
+                      </>}
                     </div>
                     <label className="ai-guidance">
                       补充生成要求（可选）

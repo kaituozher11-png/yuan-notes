@@ -196,7 +196,7 @@ test('assistant preserves expanded maps, node styles, arrows and supports automa
     { id: 'other', text: '自由连线节点', x: 2400, y: 2100, shape: 'circle' },
   ], edges: [{ id: 'line', from: 'root', to: 'other', text: '关系', arrow: true, dashed: true }] }] });
   const block = f.state.notes[0].blocks.find(block => block.type === 'mindmap');
-  assert.equal(block.width, 4000); assert.equal(block.nodes[0].x, 1800); assert.equal(block.nodes[0].fontSize, 18); assert.equal(block.edges[0].arrow, true);
+  assert.equal(block.width, 4000); assert.ok(block.nodes[0].x < 1000, 'new maps compact arbitrary model coordinates'); assert.equal(block.nodes[0].fontSize, 18); assert.equal(block.edges[0].arrow, true);
   await f.execute('configure_mindmap', { noteId: 'note1', blockId: block.id, layout: 'down', expand: true });
   const after = f.state.notes[0].blocks.find(item => item.id === block.id);
   assert.ok(after.width >= 4800); assert.ok(after.height >= 3600); assert.equal(after.nodes[0].fill, '#ffeeaa');
@@ -277,4 +277,14 @@ test('assistant loop stops on abort, rejects repeated writes and stops after bou
   assert.equal(f.writes.filter(item => item[0] === '/notes/note1').length, 1);
   await assert.rejects(runAssistantTask({ ...settings, limit: 2, ask: async () => ({ reply: '', tool: call('search', { query: '' }) }) }), /上限/);
   await assert.rejects(runAssistantTask({ ...settings, ask: async () => ({ reply: '', tool: call('read_note', { noteId: 'unknown' }) }) }), /三次/);
+});
+
+test('assistant selects adaptive generation unless user requests a template and forwards both preview modes', async () => {
+  const f = fixture();
+  await f.execute('generate_notes', { docId: 'doc1', pages: [1], mode: 'adaptive', outline: ['不应强制'], guidance: '根据内容' });
+  let sent = f.writes.find(w => w[0] === '/generate')[2]; assert.equal(sent.mode, 'adaptive'); assert.equal(sent.outline, undefined);
+  await f.execute('generate_notes', { docId: 'doc1', pages: [2], preset: 'paper', mode: 'template' }); sent = f.writes.filter(w => w[0] === '/generate').at(-1)[2]; assert.deepEqual(sent.outline, ['研究问题与背景', '核心方法', '关键公式与图表', '实验设计与结果', '主要结论', '局限与待思考问题']);
+  await f.execute('generate_notes', { docId: 'doc1', pages: [3] }); assert.equal(f.writes.filter(w => w[0] === '/generate').at(-1)[2].mode, 'adaptive');
+  await f.execute('preview_generation', { docId: 'doc1', page: 1, mode: 'adaptive' }); assert.equal(f.writes.filter(w => w[0] === '/generate').at(-1)[2].mode, 'adaptive');
+  const count = f.writes.length; await assert.rejects(f.execute('generate_notes', { docId: 'doc1', pages: [1], mode: 'unknown' })); assert.equal(f.writes.length, count);
 });

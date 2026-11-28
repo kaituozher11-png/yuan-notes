@@ -1,7 +1,7 @@
 import { pageText, pageImage } from './documents.js';
 import net from 'node:net';
 import { modelDispatcher, publicModelDispatcher } from './model-network.js';
-import { generationInstruction, normalizeAiAnswer, validateAiGuidance, validateAiOutline } from '../src/aiNoteOutline.js';
+import { generateOrganizedNote, validateGenerationMode, validateAiGuidance, validateAiOutline } from '../src/aiNoteOutline.js';
 import { requestAssistantTurn } from '../src/assistantProtocol.js';
 
 export function normalizeEndpoint(value) {
@@ -84,26 +84,29 @@ export async function callAssistant(input) {
   return requestAssistantTurn(input, options => requestChat({ ...input, ...options, assistant: true, maxTokens: 6000 }));
 }
 
-export async function callModel({ endpoint, key, model, page, text, image, outline, guidance = '', signal, test = false }) {
-  const instruction = test
-    ? '这是格式测试。只返回合法 JSON 对象：{"summary":"连接正常","concepts":[],"important":[],"cautions":[],"formula":[],"quiz":[]}。不要解释或代码块。'
-    : generationInstruction(page, outline, guidance);
+export async function callModel({ endpoint, key, model, page, text, image, outline, mode = 'template', guidance = '', signal, test = false }) {
   const content = test ? '请返回最小笔记 JSON。' : [{ type: 'text', text: `第 ${page} 页提取文字：\n${text || '无可提取文字，请依据页面图片，并标注需核对。'}` }, ...(image ? [{ type: 'image_url', image_url: { url: image } }] : [])];
-  const choice = await requestChat({ endpoint, key, model, messages: [{ role: 'system', content: instruction }, { role: 'user', content }], temperature: test ? 0 : 0.2, maxTokens: test ? 512 : 2200, signal });
-  const answer = choice.message.content;
-  const ai = parseNoteAnswer(answer, choice?.finish_reason, test);
+  const request = async (instruction, stage) => {
+    signal?.throwIfAborted();
+    const choice = await requestChat({ endpoint, key, model, messages: [{ role: 'system', content: instruction }, { role: 'user', content }], temperature: test ? 0 : 0.2, maxTokens: test ? 512 : stage === 'plan' ? 1000 : 3500, signal });
+    signal?.throwIfAborted();
+    if (choice?.finish_reason === 'length' || choice?.finish_reason === 'max_tokens') throw new Error('模型输出被截断，暂未保存笔记；请更换输出上限更高的模型');
+    return parseNoteAnswer(choice.message.content, choice?.finish_reason, test);
+  };
   if (test) {
+    const ai = await request('这是格式测试。只返回合法 JSON 对象：{"summary":"连接正常","concepts":[],"important":[],"cautions":[],"formula":[],"quiz":[]}。不要解释或代码块。');
     if (typeof ai.summary !== 'string') throw new Error('模型已连接，但未按要求返回笔记格式');
     return { ok: true };
   }
-  return normalizeAiAnswer(ai, outline);
+  return generateOrganizedNote({ page, outline, guidance, mode, signal, request });
 }
 
-export async function generatePage({ docId, page, endpoint, key, model, vision, outline, guidance = '', signal }) {
-  if (outline !== undefined) validateAiOutline(outline);
+export async function generatePage({ docId, page, endpoint, key, model, vision, outline, mode = 'template', guidance = '', signal }) {
+  validateGenerationMode(mode);
+  if (mode === 'template' && outline !== undefined) validateAiOutline(outline);
   validateAiGuidance(guidance);
   const text = await pageText(docId, page);
   const image = vision ? await pageImage(docId, page) : null;
   if (!text && !image) throw new Error('此页没有可提取文字，请使用支持图片的模型');
-  return callModel({ endpoint, key, model, page, text, image, outline, guidance, signal });
+  return callModel({ endpoint, key, model, page, text, image, outline, mode, guidance, signal });
 }

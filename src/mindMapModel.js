@@ -97,34 +97,66 @@ function forest(map, preferredRoot) {
   }
   return { roots, children, depth };
 }
-export function autoLayout(value, direction = 'right', preferredRoot) {
+export function autoLayout(value, direction = 'balanced', preferredRoot) {
   const map = normalizeMap(value);
-  if (!['right', 'down', 'grid'].includes(direction)) throw new Error('不支持的导图布局');
+  if (!['balanced', 'right', 'down', 'grid'].includes(direction)) throw new Error('不支持的导图布局');
   if (!map.nodes.length) return map;
   const lookup = new Map(map.nodes.map(node => [node.id, node]));
+  const sizes = new Map(map.nodes.map(node => [node.id, nodeSize(node)]));
   const positions = new Map();
   if (direction === 'grid') {
     const columns = Math.max(1, Math.ceil(Math.sqrt(map.nodes.length)));
     const widths = [], heights = [];
-    map.nodes.forEach((node, i) => { const s = nodeSize(node); widths[i % columns] = Math.max(widths[i % columns] || 0, s.width); heights[Math.floor(i / columns)] = Math.max(heights[Math.floor(i / columns)] || 0, s.height); });
-    let y = 60;
-    heights.forEach((height, row) => { let x = 60; widths.forEach((width, column) => { const node = map.nodes[row * columns + column]; if (node) positions.set(node.id, { x, y }); x += width + 80; }); y += height + 70; });
+    map.nodes.forEach((node, i) => { const z = sizes.get(node.id); widths[i % columns] = Math.max(widths[i % columns] || 0, z.width); heights[Math.floor(i / columns)] = Math.max(heights[Math.floor(i / columns)] || 0, z.height); });
+    let y = 48;
+    heights.forEach((height, row) => { let x = 48; widths.forEach((width, column) => { const node = map.nodes[row * columns + column]; if (node) positions.set(node.id, { x, y }); x += width + 48; }); y += height + 28; });
   } else {
-    const { roots, children, depth } = forest(map, preferredRoot);
-    const vertical = direction === 'down', levelSizes = [], spans = new Map();
-    const primary = node => nodeSize(node)[vertical ? 'height' : 'width'];
-    const secondary = node => nodeSize(node)[vertical ? 'width' : 'height'];
-    for (const node of map.nodes) levelSizes[depth.get(node.id)] = Math.max(levelSizes[depth.get(node.id)] || 0, primary(node));
-    const offsets = [60]; for (let i = 1; i < levelSizes.length; i++) offsets[i] = offsets[i - 1] + levelSizes[i - 1] + 150;
-    function measure(id) { const kids = children.get(id); const span = Math.max(secondary(lookup.get(id)), kids.reduce((sum, kid) => sum + measure(kid), 0) + Math.max(0, kids.length - 1) * 55); spans.set(id, span); return span; }
-    function assign(id, start) { const node = lookup.get(id), span = spans.get(id); const middle = start + (span - secondary(node)) / 2; positions.set(id, vertical ? { x: middle, y: offsets[depth.get(id)] } : { x: offsets[depth.get(id)], y: middle }); let childStart = start; for (const child of children.get(id)) { assign(child, childStart); childStart += spans.get(child) + 55; } }
-    let start = 60; for (const root of roots) { measure(root); assign(root, start); start += spans.get(root) + 120; }
+    const { roots, children } = forest(map, preferredRoot);
+    const vertical = direction === 'down', spans = new Map(), gap = 20, levelGap = 56;
+    const primary = id => sizes.get(id)[vertical ? 'height' : 'width'];
+    const secondary = id => sizes.get(id)[vertical ? 'width' : 'height'];
+    function measure(id) { const kids = children.get(id); const span = Math.max(secondary(id), kids.reduce((sum, kid) => sum + measure(kid), 0) + Math.max(0, kids.length - 1) * gap); spans.set(id, span); return span; }
+    // Each edge uses its own parent's size, avoiding global gaps from a long title.
+    function assign(id, start, advance, side = 1) {
+      const middle = start + (spans.get(id) - secondary(id)) / 2;
+      positions.set(id, vertical ? { x: middle, y: advance } : { x: side > 0 ? advance : advance - primary(id), y: middle });
+      const kids = children.get(id), total = kids.reduce((sum, kid) => sum + spans.get(kid), 0) + Math.max(0, kids.length - 1) * gap;
+      let childStart = start + (spans.get(id) - total) / 2;
+      for (const child of kids) { assign(child, childStart, advance + side * (primary(id) + levelGap), side); childStart += spans.get(child) + gap; }
+    }
+    let start = 48;
+    for (const root of roots) {
+      measure(root);
+      if (direction !== 'balanced' || children.get(root).length < 2) { assign(root, start, 48); start += spans.get(root) + 64; continue; }
+      const sides = [[], []], heights = [0, 0];
+      for (const child of children.get(root)) { const side = heights[0] <= heights[1] ? 0 : 1; if (sides[side].length) heights[side] += gap; sides[side].push(child); heights[side] += spans.get(child); }
+      const span = Math.max(secondary(root), ...heights), center = start + span / 2;
+      positions.set(root, { x: 0, y: center - secondary(root) / 2 });
+      sides.forEach((kids, side) => { let top = center - heights[side] / 2; for (const child of kids) { assign(child, top, side === 0 ? primary(root) + levelGap : -levelGap, side === 0 ? 1 : -1); top += spans.get(child) + gap; } });
+      start += span + 64;
+    }
   }
-  const nodes = map.nodes.map(node => ({ ...node, ...positions.get(node.id) }));
+  const minX = Math.min(...[...positions.values()].map(point => point.x)), minY = Math.min(...[...positions.values()].map(point => point.y));
+  const nodes = map.nodes.map(node => { const point = positions.get(node.id); return { ...node, x: point.x - minX + 48, y: point.y - minY + 48 }; });
   const bounds = mapBounds(nodes);
   if (bounds.x + bounds.width > MAX_MAP_SIZE || bounds.y + bounds.height > MAX_MAP_SIZE) throw new Error('布局超过画布上限，请改用网格布局或分成多张导图');
   return { ...map, nodes, ...mapDimensions({ nodes, width: map.width, height: map.height }) };
 }
+
+export function styleMindMap(value, resetStyle = false) {
+  const map = normalizeMap(value), { roots, children, depth } = forest(map);
+  const palette = [ ['#e8f2ff', '#5c80b8'], ['#e3f3ec', '#428c76'], ['#fff1dd', '#ad813f'], ['#f1eaff', '#8a6bb3'], ['#fdebf0', '#b66e86'] ];
+  const branch = new Map(); let index = 0;
+  function mark(id, shade) { branch.set(id, shade); for (const child of children.get(id)) mark(child, shade); }
+  for (const root of roots) { branch.set(root, 0); for (const child of children.get(root)) mark(child, index++ % palette.length); }
+  return { ...map, nodes: map.nodes.map(node => {
+    if (resetStyle) { node = { ...node }; for (const key of ['width', 'height', 'fontSize', 'bold', 'fill', 'textColor', 'color']) delete node[key]; }
+    const level = depth.get(node.id), [fill, color] = palette[branch.get(node.id) || 0];
+    return { ...node, width: node.width ?? (level === 0 ? 240 : level === 1 ? 190 : 176), fontSize: node.fontSize ?? (level === 0 ? 18 : level === 1 ? 16 : 15), bold: node.bold ?? level < 2, fill: node.fill ?? (level === 0 ? '#176d72' : level === 1 ? fill : '#ffffff'), textColor: node.textColor ?? (level === 0 ? '#ffffff' : '#254c50'), color: node.color ?? (level === 0 ? '#176d72' : color) };
+  }), edges: map.edges.map(edge => ({ ...edge, color: !resetStyle && edge.color && edge.color !== '#618e90' ? edge.color : palette[branch.get(edge.to) || 0][1], width: edge.width || 2 })) };
+}
+
+export function prepareGeneratedMindMap(value) { return autoLayout(styleMindMap(value), 'balanced'); }
 export function visibleMap(value) {
   const map = normalizeMap(value), visible = new Set(), grouped = new Set();
   const outgoing = new Map(map.nodes.map(node => [node.id, []]));
@@ -153,7 +185,9 @@ export function fitMapView(nodes, width, height) {
 export function edgePath(parent, node) {
   const a = nodeSize(parent), b = nodeSize(node);
   const dx = node.x + b.width / 2 - parent.x - a.width / 2, dy = node.y + b.height / 2 - parent.y - a.height / 2;
-  const vertical = Math.abs(dy) > Math.abs(dx) * 1.2, forward = vertical ? dy >= 0 : dx >= 0;
+  const gapX = Math.max(node.x - parent.x - a.width, parent.x - node.x - b.width);
+  const gapY = Math.max(node.y - parent.y - a.height, parent.y - node.y - b.height);
+  const vertical = gapY > 0 && (gapX <= 0 || gapY > gapX * 4), forward = vertical ? dy >= 0 : dx >= 0;
   const x1 = parent.x + (vertical ? a.width / 2 : forward ? a.width : 0), y1 = parent.y + (vertical ? forward ? a.height : 0 : a.height / 2);
   const x2 = node.x + (vertical ? b.width / 2 : forward ? 0 : b.width), y2 = node.y + (vertical ? forward ? 0 : b.height : b.height / 2);
   const style = node.style || node.edgeStyle;

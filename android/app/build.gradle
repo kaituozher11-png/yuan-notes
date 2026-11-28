@@ -17,8 +17,8 @@ android {
         applicationId 'com.yingxing.notes.test'
         minSdk 26
         targetSdk 35
-        versionCode 11
-        versionName '0.4.0-offline'
+        versionCode 12
+        versionName '0.4.1-offline'
     }
 
     compileOptions {

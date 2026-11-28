@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link2, Maximize2, Minimize2, Trash2, X, Plus, Minus, Undo2, Redo2, Copy, Hand, Scan, Download, Upload, Search } from 'lucide-react';
-import { autoLayout, connectNodes, fitMapView, hasMapOverlaps, mapBounds, mapDimensions, MAX_MAP_SIZE, newNode, nodeSize, normalizeMap, placeNode, SHAPES, visibleMap } from './mindMapModel';
+import { autoLayout, connectNodes, fitMapView, hasMapOverlaps, mapBounds, mapDimensions, MAX_MAP_SIZE, newNode, nodeSize, normalizeMap, placeNode, SHAPES, styleMindMap, visibleMap } from './mindMapModel';
 import { MapElements } from './MindMapSvg';
 import './mindMap.css';
 
@@ -21,12 +21,13 @@ export default function MindMap({ value, onChange }) {
   const [full, setFull] = useState(false);
   const [focus, setFocus] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
   const [hand, setHand] = useState(false);
   const [selectArea, setSelectArea] = useState(false);
   const [area, setArea] = useState(null);
   const [query, setQuery] = useState('');
   const [message, setMessage] = useState('');
-  const [layout, setLayout] = useState('right');
+  const [layout, setLayout] = useState('balanced');
   const [format, setFormat] = useState('svg');
   const [exporting, setExporting] = useState(false);
   const [, refresh] = useState(0);
@@ -73,7 +74,16 @@ export default function MindMap({ value, onChange }) {
     view.addEventListener('wheel', wheel, { passive: false });
     return () => view.removeEventListener('wheel', wheel);
   }, [full]);
-  useEffect(() => { if (full) requestAnimationFrame(() => fit()); }, [full]);
+  useEffect(() => {
+    const view = viewport.current; if (!view) return;
+    const measure = () => {
+      setViewSize(previous => previous.width === view.clientWidth && previous.height === view.clientHeight ? previous : { width: view.clientWidth, height: view.clientHeight });
+      requestAnimationFrame(() => fit(visibleMap(current.current.map).nodes));
+    };
+    measure(); const observer = new ResizeObserver(measure); observer.observe(view);
+    return () => observer.disconnect();
+  }, [full]);
+  useEffect(() => { if (full) requestAnimationFrame(() => fit()); }, [full, focus]);
   useEffect(() => { if (!full) return; const escape = event => { if (event.key === 'Escape') setFull(false); }; window.addEventListener('keydown', escape); return () => window.removeEventListener('keydown', escape); }, [full]);
 
   function add(shape, position) {
@@ -204,7 +214,7 @@ export default function MindMap({ value, onChange }) {
     </div>
     <div className="mindmap-tools mindmap-view-tools">
       <button type="button" aria-label="扩展画布" onClick={() => expand('both')}><Plus size={16}/>扩展画布</button><button type="button" aria-label="横向扩展画布" onClick={() => expand('width')}>加宽</button><button type="button" aria-label="纵向扩展画布" onClick={() => expand('height')}>加高</button>
-      <select aria-label="自动布局方向" value={layout} onChange={event => setLayout(event.target.value)}><option value="right">向右树形</option><option value="down">向下树形</option><option value="grid">网格整理</option></select><button type="button" onClick={arrange}>自动排版</button>
+      <select aria-label="自动布局方向" value={layout} onChange={event => setLayout(event.target.value)}><option value="balanced">两侧紧凑</option><option value="right">向右树形</option><option value="down">向下树形</option><option value="grid">网格整理</option></select><button type="button" onClick={arrange}>自动排版</button><button type="button" onClick={() => { try { const next = autoLayout(styleMindMap(current.current.map, true), layout); save(next); requestAnimationFrame(() => fit(visibleMap(next).nodes)); setMessage('已整理布局和默认样式，可撤销'); } catch (error) { setMessage(error.message); } }}>紧凑美化</button>
       <button type="button" className={hand ? 'active' : ''} aria-label="拖动画布" aria-pressed={hand} onClick={() => { setHand(!hand); setSelectArea(false); }}><Hand size={16}/></button><button type="button" className={selectArea ? 'active' : ''} aria-label="框选导图节点" aria-pressed={selectArea} onClick={() => { setSelectArea(!selectArea); setHand(false); }}><Scan size={16}/></button>
       <button type="button" aria-label="缩小导图" disabled={zoom <= .02} onClick={() => changeZoom(Math.max(.02, zoom / 1.25))}><Minus size={16}/></button><output aria-label="导图缩放">{Math.round(zoom * 100)}%</output><button type="button" aria-label="放大导图" disabled={zoom >= 3} onClick={() => changeZoom(Math.min(3, zoom * 1.25))}><Plus size={16}/></button>
       <button type="button" onClick={() => fit()}>适应内容</button><button type="button" onClick={() => changeZoom(1)}>100%</button>
@@ -234,7 +244,7 @@ export default function MindMap({ value, onChange }) {
     <div className="map-summary"><span>{map.nodes.length}个节点 · {map.edges.length}条线 · 画布{Math.ceil(map.width)} × {Math.ceil(map.height)}{visible.hiddenCount ? ` · 已折叠${visible.hiddenCount}个节点` : ''}</span>{overlaps && <button type="button" onClick={arrange}>检测到重叠，点击自动排版</button>}</div>
     {message && <p className="map-feedback" role="status">{message}</p>}
     <div ref={viewport} className="mindmap-viewport" tabIndex={0} aria-label="导图视区" onPointerDownCapture={touchDown} onPointerMoveCapture={touchMove} onPointerUpCapture={touchUp} onPointerCancelCapture={touchUp}>
-      <div className="mindmap-stage" style={{ width: map.width * zoom, height: map.height * zoom }}>
+      <div className="mindmap-stage" style={{ width: map.width * zoom + viewSize.width, height: map.height * zoom + viewSize.height, padding: `${viewSize.height / 2}px ${viewSize.width / 2}px` }}>
         <svg ref={svg} style={{ width: map.width * zoom, height: map.height * zoom }} width={map.width * zoom} height={map.height * zoom} viewBox={`0 0 ${map.width} ${map.height}`} aria-label="思维导图画布"
           onDragOver={event => { if ([...event.dataTransfer.types].includes('application/x-yingxing-map-shape')) event.preventDefault(); }} onDrop={event => { const shape = event.dataTransfer.getData('application/x-yingxing-map-shape'); if (SHAPES.includes(shape)) { event.preventDefault(); add(shape, coordinate(event)); } }}
           onPointerDown={backgroundDown} onPointerMove={move} onPointerUp={finish} onPointerCancel={finish}>

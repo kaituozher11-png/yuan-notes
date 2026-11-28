@@ -1,8 +1,8 @@
 import { assistantTools } from './assistantProtocol.js';
-import { aiNotePresets, validateAiGuidance, validateAiOutline } from './aiNoteOutline.js';
+import { aiNotePresets, validateGenerationMode, validateAiGuidance, validateAiOutline } from './aiNoteOutline.js';
 import { freeNoteBlocks, partsToRich } from './richDocument.js';
 import { folderName, folderTarget } from './libraryFolders.js';
-import { SHAPES, autoLayout, hasMapOverlaps, mapDimensions, MAX_MAP_SIZE, normalizeMap, nodeSize } from './mindMapModel.js';
+import { SHAPES, autoLayout, mapDimensions, MAX_MAP_SIZE, normalizeMap, nodeSize, prepareGeneratedMindMap, styleMindMap } from './mindMapModel.js';
 import { validateMarkup } from '../server/markup.js';
 
 const uid = () => crypto.randomUUID();
@@ -106,7 +106,7 @@ function blockOf(block, env, id) {
 
 function appendParts(blocks, parts, env) {
   check(Array.isArray(parts) && parts.length > 0 && parts.length <= 100, '请提供1到100项内容');
-  return freeNoteBlocks([...blocks, ...parts.map(part => partOf(part, env))]);
+  return freeNoteBlocks([...blocks, ...parts.map(part => { const block = partOf(part, env); return block.type === 'mindmap' ? { ...block, ...prepareGeneratedMindMap(block) } : block; })]);
 }
 
 const docInfo = doc => ({ id: doc.id, name: doc.name, course: doc.course, pages: doc.pages, folderId: doc.folderId || null, deleted: !!doc.deleted });
@@ -208,7 +208,7 @@ export async function prepareAssistantTool(tool, env) {
     }
     case 'create_note': {
       const doc = docBy(args.docId); const page = pageOf(doc, args.page); const title = str(args.title, 100, '笔记标题');
-      const blocks = args.parts ? appendParts([], args.parts, env).map(block => block.type === 'mindmap' && hasMapOverlaps(block.nodes) ? { ...block, ...autoLayout(block, 'right') } : block) : [];
+      const blocks = args.parts ? appendParts([], args.parts, env) : [];
       return task(`在《${doc.name}》第${page}页新建笔记“${title}”`, async () => {
         const made = await request('/notes', 'POST', { docId: doc.id, page, title, blocks });
         return noteInfo(made);
@@ -246,18 +246,19 @@ export async function prepareAssistantTool(tool, env) {
       return task(`调整“${note.title}”的内容顺序`, saveNote(note, { blocks: args.ids.map(id => note.blocks.find(block => block.id === id)) }), true);
     }
     case 'configure_mindmap': {
-      fields(args, ['noteId', 'blockId', 'layout', 'width', 'height', 'expand', 'expandAll']);
-      for (const key of ['expand', 'expandAll']) if (args[key] !== undefined) check(typeof args[key] === 'boolean', '展开参数须为布尔值');
+      fields(args, ['noteId', 'blockId', 'layout', 'width', 'height', 'expand', 'expandAll', 'beautify']);
+      for (const key of ['expand', 'expandAll', 'beautify']) if (args[key] !== undefined) check(typeof args[key] === 'boolean', '展开参数须为布尔值');
       const note = noteBy(args.noteId), block = note.blocks?.find(item => item.id === args.blockId && item.type === 'mindmap');
       check(block, '思维导图区块不存在，请先读取笔记');
-      let map = normalizeMap(block);
+      let map = args.beautify ? styleMindMap(block, true) : normalizeMap(block);
+      if (args.beautify && args.layout === undefined) map = autoLayout(map, 'balanced');
       if (args.layout !== undefined) map = autoLayout(map, args.layout);
       if (args.width !== undefined) map.width = number(args.width, 1200, MAX_MAP_SIZE);
       if (args.height !== undefined) map.height = number(args.height, 700, MAX_MAP_SIZE);
       if (args.expand) { map.width = Math.min(MAX_MAP_SIZE, map.width + 800); map.height = Math.min(MAX_MAP_SIZE, map.height + 600); }
       if (args.expandAll) map.nodes = map.nodes.map(node => ({ ...node, collapsed: false }));
       map = normalizeMap(map);
-      return task(`调整“${note.title}”中的导图画布和布局`, saveNote(note, { blocks: note.blocks.map(item => item.id === block.id ? { ...block, ...map } : item) }), !!args.layout);
+      return task(`调整“${note.title}”中的导图画布和布局`, saveNote(note, { blocks: note.blocks.map(item => item.id === block.id ? { ...block, ...map } : item) }), !!args.layout || !!args.beautify);
     }
     case 'edit_mindmap': {
       fields(args, ['noteId', 'blockId', 'nodes', 'edges', 'removeNodes', 'removeEdges']);
@@ -337,7 +338,8 @@ export async function prepareAssistantTool(tool, env) {
       check(Array.isArray(args.pages) && args.pages.length > 0 && args.pages.length <= 10 && new Set(args.pages).size === args.pages.length, '每次生成1到10页，页码不能重复');
       args.pages.forEach(page => pageOf(doc, page));
       const preset = args.preset || 'course'; check(Object.hasOwn(aiNotePresets, preset), '模板须为论文或课件');
-      const outline = validateAiOutline(args.outline || aiNotePresets[preset].titles); const guidance = validateAiGuidance(args.guidance || '');
+      const mode = validateGenerationMode(args.mode ?? (args.outline || args.preset ? 'template' : 'adaptive'));
+      const outline = mode === 'template' ? validateAiOutline(args.outline || aiNotePresets[preset].titles) : undefined; const guidance = validateAiGuidance(args.guidance || '');
       return task(`生成《${doc.name}》第${args.pages.join('、')}页的智能笔记`, async () => {
         const results = [];
         for (const page of args.pages) {
@@ -345,7 +347,7 @@ export async function prepareAssistantTool(tool, env) {
           const fresh = await env.api('/state');
           if (fresh.notes.some(item => item.docId === doc.id && item.page === page && item.kind === 'ai' && !item.deleted)) { results.push({ page, skipped: '已有智能笔记，未覆盖' }); continue; }
           try {
-            const note = await env.api('/generate', { method: 'POST', body: JSON.stringify({ ...env.model, docId: doc.id, page, outline, guidance }), signal: env.signal });
+            const note = await env.api('/generate', { method: 'POST', body: JSON.stringify({ ...env.model, docId: doc.id, page, outline, mode, guidance }), signal: env.signal });
             results.push({ page, note: noteInfo(note) });
           } catch (error) { if (env.signal?.aborted) throw error; results.push({ page, error: error.message }); }
           env.progress?.(`已处理第${page}页`);
@@ -356,11 +358,12 @@ export async function prepareAssistantTool(tool, env) {
     case 'preview_generation': {
       const doc = docBy(args.docId); const page = pageOf(doc, args.page);
       const preset = args.preset || 'course'; check(Object.hasOwn(aiNotePresets, preset), '模板须为论文或课件');
-      const outline = validateAiOutline(args.outline || aiNotePresets[preset].titles); const guidance = validateAiGuidance(args.guidance || '');
+      const mode = validateGenerationMode(args.mode ?? (args.outline || args.preset ? 'template' : 'adaptive'));
+      const outline = mode === 'template' ? validateAiOutline(args.outline || aiNotePresets[preset].titles) : undefined; const guidance = validateAiGuidance(args.guidance || '');
       check(env.previews, '草稿会话尚未就绪');
       const previous = state.notes.find(note => note.docId === doc.id && note.page === page && note.kind === 'ai' && !note.deleted)?.ai || null;
       return task(`准备《${doc.name}》第${page}页的智能笔记对比草稿`, async () => {
-        const candidate = await env.api('/generate', { method: 'POST', body: JSON.stringify({ ...env.model, docId: doc.id, page, outline, guidance, preview: true }), signal: env.signal });
+        const candidate = await env.api('/generate', { method: 'POST', body: JSON.stringify({ ...env.model, docId: doc.id, page, outline, mode, guidance, preview: true }), signal: env.signal });
         env.previews.set(candidate.token, { ...candidate, docId: doc.id, page, previous });
         return candidate;
       });

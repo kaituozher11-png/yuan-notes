@@ -61,3 +61,43 @@ test('legacy list notes remove only leading repeated section labels', () => {
   assert.deepEqual(sections[0].sourceValue, items);
   assert.deepEqual(items, ['### 核心概念', '**核心概念**\n\n概念说明', '### 核心概念\n正文引用']);
 });
+
+// Adaptive notes plan independently from each page and never reuse stale fixed titles.
+test('adaptive notes plan then write with validated page-specific headings and preserve math', async () => {
+  const { generateOrganizedNote } = await import('../src/aiNoteOutline.js');
+  const cases = [ ['概念定义', ['频率偏移的含义', '参数与单位']], ['推导页', ['适用条件', '推导步骤', '结果解释']], ['实验结果', ['实验设置', '误差随信噪比的变化']], ['封面', ['论文主题']] ];
+  const saved = [];
+  for (let page = 1; page <= cases.length; page++) {
+    const stages = [], titles = cases[page - 1][1];
+    const result = await generateOrganizedNote({ page, mode: 'adaptive', outline: ['不要复用的固定标题'], guidance: '解释变量', request: async (instruction, stage) => {
+      stages.push(stage); assert.match(instruction, new RegExp(`第 ${page} 页`));
+      if (stage === 'plan') { assert.match(instruction, /不套固定六段/); assert.match(instruction, /解释变量/); return { titles }; }
+      assert.ok(instruction.includes(JSON.stringify(titles))); assert.doesNotMatch(instruction, /不要复用的固定标题/);
+      return { sections: titles.map(title => ({ content: `## ${title}\n\n公式 $E=mc^2$ 与本页的解释` })) };
+    } });
+    assert.deepEqual(stages, ['plan', 'write']); assert.deepEqual(result.sections.map(s => s.title), titles);
+    assert.equal(result.organization.mode, 'adaptive'); assert.match(result.sections[0].content, /\$E=mc\^2\$/); assert.doesNotMatch(result.sections[0].content, /^##/);
+    saved.push(result);
+  }
+  assert.equal(new Set(saved.map(result => result.sections.length)).size, 3);
+});
+
+test('adaptive invalid plans, empty bodies and cancellation never fall back to a rigid template', async () => {
+  const { generateOrganizedNote } = await import('../src/aiNoteOutline.js');
+  for (const plan of [{}, { titles: [] }, { titles: ['重复', '重复'] }, { titles: ['x'.repeat(61)] }, { titles: Array.from({ length: 9 }, (_, i) => String(i)) }]) {
+    let calls = 0;
+    await assert.rejects(generateOrganizedNote({ page: 1, mode: 'adaptive', request: async () => { calls++; return plan; } })); assert.equal(calls, 1);
+  }
+  await assert.rejects(generateOrganizedNote({ page: 1, mode: 'wrong', request: () => assert.fail('invalid mode should not request model') }));
+  await assert.rejects(generateOrganizedNote({ page: 1, mode: 'adaptive', request: async (_, stage) => stage === 'plan' ? { titles: ['有效标题'] } : { sections: [{ content: '' }] } }), /空白/);
+  const controller = new AbortController(); let calls = 0;
+  await assert.rejects(generateOrganizedNote({ page: 1, mode: 'adaptive', signal: controller.signal, request: async () => { calls++; controller.abort(); return { titles: ['阅读结果'] }; } })); assert.equal(calls, 1);
+});
+
+test('template mode skips planning and keeps exact user titles while adaptive ignores invalid hidden titles', async () => {
+  const { generateOrganizedNote } = await import('../src/aiNoteOutline.js'); const stages = [];
+  const result = await generateOrganizedNote({ page: 2, mode: 'template', outline: ['自选标题'], request: async (_, stage) => { stages.push(stage); return { sections: [{ content: '正文' }] }; } });
+  assert.deepEqual(stages, ['write']); assert.deepEqual(result, { sections: [{ title: '自选标题', content: '正文' }] });
+  const auto = await generateOrganizedNote({ page: 2, mode: 'adaptive', outline: ['', ''], request: async (_, stage) => stage === 'plan' ? { titles: ['本页知识'] } : { sections: [{ content: '内容' }] } });
+  assert.equal(auto.sections[0].title, '本页知识');
+});

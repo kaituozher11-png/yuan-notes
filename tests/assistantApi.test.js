@@ -68,3 +68,30 @@ test('assistant performs a complete multi-step task through real model and docum
   const copied = (await api('/state')).notes.find(note => note.id === copy.id);
   assert.deepEqual(copied.blocks, state.notes[0].blocks); assert.deepEqual(copied.links, state.notes[0].links);
 });
+
+test('adaptive API preview preserves old AI and personal work until explicit commit and never saves a failed plan', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'yuan-adaptive-')); const docId = crypto.randomUUID();
+  await writeFile(path.join(directory, 'state.json'), JSON.stringify({ docs: [{ id: docId, name: 'PDF', pages: 1, deleted: false }], notes: [], folders: [], templates: [] }));
+  // Import a real one-page PDF so this test exercises page extraction before planning.
+  let invalid = false, count = 0;
+  const provider = http.createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk; const body = JSON.parse(raw); count++;
+    assert.match(JSON.stringify(body.messages[1]), /Energy conservation/);
+    const planning = body.messages[0].content.includes('结构规划师');
+    const answer = planning ? { titles: invalid ? [] : ['能量守恒的含义', '学习时要检查的条件'] } : { sections: [{ content: '来自原文的具体解释' }, { content: '核对能量的条件' }] };
+    res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(answer) } }] }));
+  }); await new Promise(resolve => provider.listen(0, '127.0.0.1', resolve));
+  const child = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: '0', YINGXING_DATA_DIR: directory }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  t.after(async () => { provider.close(); const stopped = new Promise(resolve => child.once('exit', resolve)); child.kill(); await stopped; await rm(directory, { recursive: true, force: true }); });
+  const base = await new Promise((resolve, reject) => { let out = ''; const timer = setTimeout(() => reject(Error('server timeout')), 15000); child.stdout.on('data', chunk => { out += chunk; const m = out.match(/http:\/\/127\.0\.0\.1:\d+/); if (m) { clearTimeout(timer); resolve(m[0]); } }); });
+  const api = async (route, options = {}) => { const res = await fetch(base + '/api' + route, options); return { status: res.status, value: await res.json() }; };
+  const form = new FormData(); form.append('file', new Blob([await readFile('tests/fixtures/energy.pdf')], { type: 'application/pdf' }), 'source.pdf');
+  const imported = await api('/docs', { method: 'POST', body: form }); assert.equal(imported.status, 200);
+  const post = body => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const input = { endpoint: `http://127.0.0.1:${provider.address().port}/v1`, model: 'mock', key: 'dummy', docId: imported.value.id, page: 1, mode: 'adaptive' };
+  invalid = true; const bad = await api('/generate', post(input)); assert.equal(bad.status, 400); assert.equal(count, 1); assert.equal((await api('/state')).value.notes.length, 0);
+  invalid = false; const made = await api('/generate', post(input)); assert.equal(made.status, 200); assert.equal(made.value.ai.organization.mode, 'adaptive');
+  await api('/notes/' + made.value.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: [{ id: 'own', type: 'text', text: '个人推导保留' }] }) });
+  const old = (await api('/state')).value.notes[0], preview = await api('/generate', post({ ...input, preview: true })); assert.equal(preview.status, 200); assert.deepEqual((await api('/state')).value.notes[0], old);
+  const committed = await api('/generate/commit', post({ token: preview.value.token })); assert.equal(committed.status, 200); assert.equal(committed.value.blocks[0].text, '个人推导保留');
+});

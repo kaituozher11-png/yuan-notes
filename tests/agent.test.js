@@ -78,3 +78,23 @@ test('model adapter sends custom headings and rejects incomplete generated notes
   responseSections = [{ content: '缺少一项' }];
   await assert.rejects(callModel(input), /完整笔记/);
 });
+
+test('adaptive model requests read the source twice, plan per page, reject invalid plans and preserve explicit templates', async t => {
+  const log = []; let invalid = false, truncated = false;
+  const server = http.createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    const payload = JSON.parse(raw), instruction = payload.messages[0].content, source = JSON.stringify(payload.messages[1].content);
+    const planning = instruction.includes('结构规划师'); log.push({ planning, source });
+    const titles = source.includes('Derivation') ? ['推导前提', '公式的来龙去脉', '适用范围'] : ['本页主题'];
+    const note = planning ? invalid ? { titles: ['重复', '重复'] } : { titles } : { sections: titles.map(title => ({ content: `## ${title}\n解释 $x^2$` })) };
+    res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ finish_reason: truncated ? 'length' : 'stop', message: { content: JSON.stringify(note) } }] }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => server.close());
+  const input = { endpoint: `http://127.0.0.1:${server.address().port}/v1`, key: 'test-key', model: 'study-model', mode: 'adaptive', page: 1, text: 'Cover', image: 'data:image/png;base64,YQ==' };
+  const cover = await callModel(input); const derivation = await callModel({ ...input, page: 2, text: 'Derivation' });
+  assert.equal(cover.sections.length, 1); assert.equal(derivation.sections.length, 3); assert.deepEqual(log.map(c => c.planning), [true, false, true, false]);
+  assert.equal(log[0].source, log[1].source); assert.equal(log[2].source, log[3].source); assert.match(log[0].source, /data:image/);
+  invalid = true; const count = log.length; await assert.rejects(callModel(input), /不能重复/); assert.equal(log.length, count + 1, 'bad plan must not write');
+  invalid = false; truncated = true; await assert.rejects(callModel(input), /被截断/);
+  truncated = false; const fixed = await callModel({ ...input, mode: 'template', outline: ['用户指定'] }); assert.equal(fixed.sections[0].title, '用户指定'); assert.equal(log.at(-1).planning, false);
+});

@@ -1,7 +1,7 @@
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { pdfDocumentOptions } from './pdfAssets';
-import { generationInstruction, normalizeAiAnswer, validateAiGuidance, validateAiOutline } from './aiNoteOutline';
+import { generateOrganizedNote, validateGenerationMode, validateAiGuidance, validateAiOutline } from './aiNoteOutline';
 import { requestAssistantTurn } from './assistantProtocol';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -116,45 +116,49 @@ function serviceError(status, body, key) {
   return new Error(detail ? `${fallback}：${detail}` : fallback);
 }
 
-export async function callOfflineModel({ endpoint, key, model, page, text, image, outline, guidance = '', test = false, signal }) {
+export async function callOfflineModel({ endpoint, key, model, page, text, image, outline, mode = 'template', guidance = '', test = false, signal }) {
   if (!modelOnline()) throw new Error('无法生成智能笔记，请联网');
   if (!key || !model) throw new Error('请填写模型名称和 API 密钥');
   const url = normalizeModelEndpoint(endpoint);
-  const instruction = test
-    ? '这是格式测试。只返回合法 JSON 对象：{"summary":"连接正常","concepts":[],"important":[],"cautions":[],"formula":[],"quiz":[]}。不要解释或代码块。'
-    : generationInstruction(page, outline, guidance);
   const content = test ? '请返回最小笔记 JSON。' : [{ type: 'text', text: `第 ${page} 页提取文字：\n${text || '无可提取文字，请依据页面图片，并标注需核对。'}` }, ...(image ? [{ type: 'image_url', image_url: { url: image } }] : [])];
-  let response;
-  try {
-    response = await nativeRequest(url, {
-      model, messages: [{ role: 'system', content: instruction }, { role: 'user', content }],
-      temperature: test ? 0 : 0.2, max_tokens: test ? 512 : 2200,
-    }, key, signal);
+  const request = async (instruction, stage) => {
     signal?.throwIfAborted();
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    throw new Error(modelOnline() ? '无法连接模型服务商，请检查网络和接口地址' : '无法生成智能笔记，请联网');
-  }
-  if (response.status !== 200) {
-    if (!modelOnline()) throw new Error('无法生成智能笔记，请联网');
-    throw serviceError(response.status, response.body.slice(0, maxResponse), key);
-  }
-  let data;
-  try { data = JSON.parse(response.body.slice(0, maxResponse)); }
-  catch { throw new Error('模型返回内容不是有效 JSON'); }
-  const choice = data.choices?.[0];
-  if (typeof choice?.message?.content !== 'string') throw new Error('模型返回内容格式不兼容');
-  const ai = parseAnswer(choice.message.content, choice.finish_reason, test);
+    let response;
+    try {
+      response = await nativeRequest(url, {
+        model, messages: [{ role: 'system', content: instruction }, { role: 'user', content }],
+        temperature: test ? 0 : 0.2, max_tokens: test ? 512 : stage === 'plan' ? 1000 : 3500,
+      }, key, signal);
+      signal?.throwIfAborted();
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new Error(modelOnline() ? '无法连接模型服务商，请检查网络和接口地址' : '无法生成智能笔记，请联网');
+    }
+    if (response.status !== 200) {
+      if (!modelOnline()) throw new Error('无法生成智能笔记，请联网');
+      throw serviceError(response.status, response.body.slice(0, maxResponse), key);
+    }
+    let data;
+    try { data = JSON.parse(response.body.slice(0, maxResponse)); }
+    catch { throw new Error('模型返回内容不是有效 JSON'); }
+    const choice = data.choices?.[0];
+    if (typeof choice?.message?.content !== 'string') throw new Error('模型返回内容格式不兼容');
+    if (choice.finish_reason === 'length' || choice.finish_reason === 'max_tokens') throw new Error('模型输出被截断，暂未保存笔记；请更换输出上限更高的模型');
+    return parseAnswer(choice.message.content, choice.finish_reason, test);
+  };
+
   if (test) {
+    const ai = await request('这是格式测试。只返回合法 JSON 对象：{"summary":"连接正常","concepts":[],"important":[],"cautions":[],"formula":[],"quiz":[]}。不要解释或代码块。');
     if (typeof ai.summary !== 'string') throw new Error('模型已连接，但未按要求返回笔记格式');
     return { ok: true };
   }
-  return normalizeAiAnswer(ai, outline);
+  return generateOrganizedNote({ page, outline, guidance, mode, signal, request });
 }
 
-export async function generateOfflinePage({ docId, page, endpoint, key, model, vision, outline, guidance = '', signal }, loadPdf) {
+export async function generateOfflinePage({ docId, page, endpoint, key, model, vision, outline, mode = 'template', guidance = '', signal }, loadPdf) {
   if (!modelOnline()) throw new Error('无法生成智能笔记，请联网');
-  if (outline !== undefined) validateAiOutline(outline);
+  validateGenerationMode(mode);
+  if (mode === 'template' && outline !== undefined) validateAiOutline(outline);
   validateAiGuidance(guidance);
   const loading = pdfjs.getDocument({ data: await loadPdf(docId), ...pdfDocumentOptions });
   let text;
@@ -176,5 +180,5 @@ export async function generateOfflinePage({ docId, page, endpoint, key, model, v
   } finally { await loading.destroy(); }
   if (!text && !image) throw new Error('此页没有可提取文字，请使用支持图片的模型');
   signal?.throwIfAborted();
-  return callOfflineModel({ endpoint, key, model, page, text, image, outline, guidance, signal });
+  return callOfflineModel({ endpoint, key, model, page, text, image, outline, mode, guidance, signal });
 }

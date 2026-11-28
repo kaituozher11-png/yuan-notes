@@ -131,3 +131,28 @@ test('export bounds include long connector labels and corrupted height cannot co
   assert.ok(bounds.y < -100); assert.ok(bounds.height > 300);
   assert.ok(nodeSize({ height: 1e10 }).height <= 1200);
 });
+
+test('balanced compact layout keeps wide roots local and distributes dense branches on both sides', async () => {
+  const { prepareGeneratedMindMap } = await import('../src/mindMapModel.js');
+  const nodes = [{ id: 'root', text: '完整论文的研究逻辑与主要结论', x: 20, y: 2000 }], edges = [];
+  for (let b = 0; b < 6; b++) { nodes.push({ id: `b${b}`, text: `第${b}个主要知识分支`, x: 8000, y: b * 900 }); edges.push({ id: `r${b}`, from: 'root', to: `b${b}` });
+    for (let n = 0; n < 4; n++) { nodes.push({ id: `b${b}-${n}`, text: `关键概念${n}与条件123`, x: 16000, y: b * 900 + n * 150 }); edges.push({ id: `e${b}-${n}`, from: `b${b}`, to: `b${b}-${n}` }); }
+  }
+  const before = structuredClone({ nodes, edges }), result = prepareGeneratedMindMap(before), bounds = mapBounds(result.nodes);
+  assert.equal(hasMapOverlaps(result.nodes, 12), false); assert.equal(result.nodes.length, 31); assert.equal(result.edges.length, 30);
+  assert.ok(bounds.width < 1800, 'compact width'); assert.ok(bounds.height < 1300, 'balanced height');
+  const root = result.nodes[0], branches = result.nodes.filter(n => /^b\d$/.test(n.id)); assert.ok(branches.some(n => n.x < root.x)); assert.ok(branches.some(n => n.x > root.x));
+  assert.equal(root.fill, '#176d72'); assert.equal(root.bold, true); assert.ok(new Set(branches.map(n => n.fill)).size > 2);
+  assert.deepEqual(result.nodes.map(n => n.text), nodes.map(n => n.text)); assert.deepEqual({ nodes, edges }, before);
+  const wide = { nodes: [{ id: 'a', text: '宽标题', x: 0, y: 0, width: 640 }, { id: 'b', text: 'B', x: 9000, y: 0 }, { id: 'c', text: 'C', x: 18000, y: 0 }], edges: [{ id: 'ab', from: 'a', to: 'b' }, { id: 'bc', from: 'b', to: 'c' }] };
+  const tidy = autoLayout(wide, 'right'); assert.ok(tidy.nodes[2].x - tidy.nodes[1].x < 250, 'a wide root must not stretch every deeper level');
+});
+
+test('balanced layout handles cycles, shared nodes, disconnected components, long labels and style restoration', async () => {
+  const { styleMindMap } = await import('../src/mindMapModel.js');
+  const nodes = Array.from({ length: 80 }, (_, i) => ({ id: `n${i}`, text: `知识${i}中文ABC`.repeat(i % 3 + 1), x: 10, y: 10, shape: ['rectangle', 'circle', 'diamond'][i % 3] }));
+  const edges = nodes.slice(1).map((n, i) => ({ id: `e${i}`, from: i % 4 ? `n${i}` : 'n0', to: n.id })); edges.push({ id: 'cycle', from: 'n3', to: 'n0' }); edges.push({ id: 'shared', from: 'n12', to: 'n7' });
+  const map = autoLayout({ nodes, edges }, 'balanced'); assert.equal(hasMapOverlaps(map.nodes, 12), false); assert.equal(map.nodes.length, 80); assert.deepEqual(map.edges, edges);
+  const color = { nodes: [{ id: 'a', x: 0, y: 0, text: '主题', fill: '#ffffff' }], edges: [] }; assert.equal(styleMindMap(color).nodes[0].fill, '#ffffff'); assert.equal(styleMindMap(color, true).nodes[0].fill, '#176d72');
+  const components = autoLayout({ nodes: nodes.slice(0, 5), edges: [] }, 'balanced'); assert.equal(hasMapOverlaps(components.nodes), false);
+});
