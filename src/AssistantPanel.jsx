@@ -25,6 +25,8 @@ export default function AssistantPanel({ open, onClose, models, modelId, setMode
   const [phrase, setPhrase] = useState('');
   const [unlocking, setUnlocking] = useState(false);
   const [error, setError] = useState('');
+  const [canResume, setCanResume] = useState(false);
+  const suspended = useRef(null);
   const controller = useRef(null);
   const confirmation = useRef(null);
   const memory = useRef([]);
@@ -61,21 +63,27 @@ export default function AssistantPanel({ open, onClose, models, modelId, setMode
   function decide(value) {
     const resolve = confirmation.current; confirmation.current = null; setPending(null); resolve?.(value);
   }
-  async function send(event) {
+  async function send(event, resuming = false) {
     event.preventDefault();
     if (active.current || uploading || externallyBusy) return;
-    const command = input.trim();
+    const command = resuming ? suspended.current?.command : input.trim();
     if (!command || command.length > 4000) return setError('请输入1到4000字的指令');
     if (!modelOnline()) return setError('智能助手需要联网，请联网后重试');
     if (!model || !apiKey) return setError('请先选择并解锁一个模型连接');
     active.current = true; setRunning(true); setError(''); setInput('');
     const abort = new AbortController(); controller.current = abort;
     const selected = { endpoint: model.endpoint, model: model.model, key: apiKey, vision: model.vision };
-    const currentAttachments = [...attachments]; setAttachments([]);
-    emit(message('user', command, { attachments: currentAttachments }));
+    const currentAttachments = resuming ? suspended.current.attachments : [...attachments];
+    const resumeState = resuming ? suspended.current.state : null;
+    setAttachments([]); setCanResume(false);
+    if (!resuming) suspended.current = { command, attachments: currentAttachments, state: null };
+    if (resuming) emit(message('status', '从上次进度继续，已完成的操作不会重复提交。'));
+    else emit(message('user', command, { attachments: currentAttachments }));
     try {
       await flush(); abort.signal.throwIfAborted();
       const result = await runAssistantTask({
+        state: resumeState,
+        onCheckpoint: state => { suspended.current = { command, attachments: currentAttachments, state }; },
         history: [...memory.current.slice(-8), { role: 'user', content: command }],
         context: async () => publicData(assistantContext(await api('/state'), latest.current.context, currentAttachments)),
         ask: ({ history, context }) => api('/assistant/turn', { ...json('POST', { ...selected, history, context }), signal: abort.signal }),
@@ -115,9 +123,12 @@ export default function AssistantPanel({ open, onClose, models, modelId, setMode
         refresh: () => latest.current.reload(),
       });
       memory.current.push({ role: 'user', content: command }, { role: 'assistant', content: JSON.stringify({ reply: result.reply, executed: result.observations.map(item => ({ tool: item.tool, ok: item.ok, ...(item.ok ? {} : { error: item.error }) })) }) });
+      if (result.paused) setCanResume(true);
+      else suspended.current = null;
     } catch (failure) {
       const text = abort.signal.aborted ? '已停止。已完成的操作保留；尚未执行的步骤已取消。' : failure.message;
       emit(message('error', text));
+      setCanResume(!!suspended.current?.state);
       memory.current.push({ role: 'user', content: command }, { role: 'assistant', content: text + '。如需继续，请先查找并检查当前资料状态，不要重复写入。' });
       await latest.current.reload().catch(() => {});
     } finally {
@@ -164,7 +175,7 @@ export default function AssistantPanel({ open, onClose, models, modelId, setMode
   }
   return <aside hidden={!open} className="assistant-panel" role="dialog" aria-label="智能助手">
     <header className="assistant-header"><div><Bot size={22}/><strong>智能助手</strong></div><div>
-      <button type="button" title="新建对话" aria-label="新建对话" disabled={running || uploading} onClick={() => { setEvents([]); memory.current = []; images.current.clear(); setAttachments([]); setError(''); }}><Plus size={19}/></button>
+      <button type="button" title="新建对话" aria-label="新建对话" disabled={running || uploading} onClick={() => { setEvents([]); memory.current = []; images.current.clear(); setAttachments([]); setError(''); suspended.current = null; setCanResume(false); }}><Plus size={19}/></button>
       <button type="button" title="关闭智能助手" aria-label="关闭智能助手" onClick={() => { stop(); onClose(); }}><X size={19}/></button>
     </div></header>
     <div className="assistant-model">
@@ -198,6 +209,7 @@ export default function AssistantPanel({ open, onClose, models, modelId, setMode
     <form className="assistant-composer" onSubmit={send}>
       {!!attachments.length && <div className="assistant-attachments">{attachments.map((item, index) => <span className="assistant-attachment" key={index}>{item.name}<button type="button" aria-label={`移除附件${item.name}`} onClick={() => setAttachments(old => old.filter((_, position) => position !== index))}><X size={12}/></button></span>)}</div>}
       {error && <p className="assistant-error" role="alert">{error}</p>}
+      {canResume && !running && <button className="secondary-button" type="button" disabled={uploading || externallyBusy || !apiKey} onClick={event => send(event, true)}>继续任务</button>}
       <label className="sr-only" htmlFor="assistant-command">给智能助手的指令</label>
       <textarea id="assistant-command" value={input} maxLength={4000} disabled={running || uploading} placeholder="例如：把当前页的公式整理成笔记，再做一张思维导图" onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form.requestSubmit(); } }}/>
       <div className="assistant-composer-actions"><button className="secondary-button" type="button" disabled={running || uploading || externallyBusy} onClick={() => attachmentInput.current?.click()}><Paperclip size={16}/>{uploading ? '正在导入…' : '添加图片 / 导入资料'}</button>

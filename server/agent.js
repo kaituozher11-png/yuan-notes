@@ -2,7 +2,7 @@ import { pageText, pageImage } from './documents.js';
 import net from 'node:net';
 import { modelDispatcher, publicModelDispatcher } from './model-network.js';
 import { generationInstruction, normalizeAiAnswer, validateAiGuidance, validateAiOutline } from '../src/aiNoteOutline.js';
-import { assistantMessages, parseAssistantTurn } from '../src/assistantProtocol.js';
+import { requestAssistantTurn } from '../src/assistantProtocol.js';
 
 export function normalizeEndpoint(value) {
   const url = new URL(value);
@@ -59,12 +59,12 @@ async function modelServiceError(response, key) {
   return new Error(`${status === 401 || status === 403 || status === 402 || status === 429 ? fallback : `模型服务返回错误 ${status}`}：${detail}`);
 }
 
-export async function requestChat({ endpoint, key, model, messages, maxTokens = 2200, signal, temperature = 0.2 }) {
+export async function requestChat({ endpoint, key, model, messages, maxTokens = 2200, signal, temperature = 0.2, jsonMode = false, assistant = false }) {
   const url = normalizeEndpoint(endpoint);
   if (!key || !model) throw new Error('请填写模型名称和 API 密钥');
   let response;
   try {
-    response = await fetch(url, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens }), signal: signal || AbortSignal.timeout(120000), dispatcher: process.env.YINGXING_PUBLIC === '1' ? publicModelDispatcher() : modelDispatcher(url) });
+    response = await fetch(url, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens, ...(jsonMode ? { response_format: { type: 'json_object' } } : {}) }), signal: signal || AbortSignal.timeout(120000), dispatcher: process.env.YINGXING_PUBLIC === '1' ? publicModelDispatcher() : modelDispatcher(url) });
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     if (error.name === 'TimeoutError') throw new Error('连接模型服务商超时，请检查网络或代理');
@@ -76,13 +76,12 @@ export async function requestChat({ endpoint, key, model, messages, maxTokens = 
   const body = await response.json();
   const choice = body.choices?.[0];
   const answer = choice?.message?.content;
-  if (typeof answer !== 'string') throw new Error('模型返回内容格式不兼容');
+  if (!assistant && typeof answer !== 'string') throw new Error('模型返回内容格式不兼容');
   return choice;
 }
 
 export async function callAssistant(input) {
-  const choice = await requestChat({ ...input, messages: assistantMessages(input), maxTokens: 6000 });
-  return parseAssistantTurn(choice.message.content, choice.finish_reason);
+  return requestAssistantTurn(input, options => requestChat({ ...input, ...options, assistant: true, maxTokens: 6000 }));
 }
 
 export async function callModel({ endpoint, key, model, page, text, image, outline, guidance = '', signal, test = false }) {

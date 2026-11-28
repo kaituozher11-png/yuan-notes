@@ -145,6 +145,23 @@ export async function prepareAssistantTool(tool, env) {
       const doc = docBy(args.docId); const page = pageOf(doc, args.page);
       return task(`读取《${doc.name}》第${page}页`, async () => ({ document: docInfo(doc), page, ...await env.api(`/docs/${doc.id}/pages/${page}/text`, { signal: env.signal }) }));
     }
+    case 'read_pages': {
+      const doc = docBy(args.docId);
+      check(Array.isArray(args.pages) && args.pages.length > 0 && args.pages.length <= 5 && new Set(args.pages).size === args.pages.length, '每次读取1到5个不同页码');
+      args.pages.forEach(page => pageOf(doc, page));
+      return task(`读取《${doc.name}》第${args.pages.join('、')}页`, async () => {
+        const pages = []; const maximum = Math.floor(20000 / args.pages.length);
+        for (const page of args.pages) {
+          env.signal?.throwIfAborted();
+          try {
+            const result = await env.api(`/docs/${doc.id}/pages/${page}/text`, { signal: env.signal });
+            const text = String(result.text || '');
+            pages.push({ page, text: text.slice(0, maximum), truncated: text.length > maximum, ...(text ? {} : { notice: '此页没有可提取文字，不代表没有图像内容' }) });
+          } catch (error) { if (env.signal?.aborted) throw error; pages.push({ page, error: error.message }); }
+        }
+        return { document: docInfo(doc), pages, pagesRead: pages.filter(page => !page.error).map(page => page.page), complete: pages.every(page => !page.error && !page.truncated) };
+      });
+    }
     case 'read_note': {
       const note = noteBy(args.noteId, true);
       return task(`读取笔记“${note.title}”`, async () => env.publicData ? env.publicData(note) : note);

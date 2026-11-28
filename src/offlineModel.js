@@ -2,7 +2,7 @@ import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { pdfDocumentOptions } from './pdfAssets';
 import { generationInstruction, normalizeAiAnswer, validateAiGuidance, validateAiOutline } from './aiNoteOutline';
-import { assistantMessages, parseAssistantTurn } from './assistantProtocol';
+import { requestAssistantTurn } from './assistantProtocol';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -50,16 +50,18 @@ function nativeRequest(url, payload, key, signal) {
 export async function callOfflineAssistant(input) {
   if (!modelOnline()) throw new Error('智能助手需要联网，请联网后重试');
   if (!input.key || !input.model) throw new Error('请先选择并解锁模型连接');
-  const response = await nativeRequest(normalizeModelEndpoint(input.endpoint), {
-    model: input.model, messages: assistantMessages(input), temperature: 0.2, max_tokens: 6000,
-  }, input.key, input.signal);
-  input.signal?.throwIfAborted();
-  if (response.status !== 200) throw serviceError(response.status, response.body.slice(0, maxResponse), input.key);
-  let data;
-  try { data = JSON.parse(response.body.slice(0, maxResponse)); }
-  catch { throw new Error('助手返回内容不是有效 JSON'); }
-  const choice = data.choices?.[0];
-  return parseAssistantTurn(choice?.message?.content, choice?.finish_reason);
+  return requestAssistantTurn(input, async ({ messages, jsonMode }) => {
+    const response = await nativeRequest(normalizeModelEndpoint(input.endpoint), {
+      model: input.model, messages, temperature: 0.2, max_tokens: 6000,
+      ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+    }, input.key, input.signal);
+    input.signal?.throwIfAborted();
+    if (response.status !== 200) throw serviceError(response.status, response.body.slice(0, maxResponse), input.key);
+    let data;
+    try { data = JSON.parse(response.body.slice(0, maxResponse)); }
+    catch { throw new Error('助手返回内容不是有效 JSON'); }
+    return data.choices?.[0];
+  });
 }
 
 export async function readOfflineText(docId, page, loadPdf) {
