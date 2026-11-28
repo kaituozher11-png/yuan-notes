@@ -1,6 +1,6 @@
 {
   "name": "yuan-notes",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "engines": {
     "node": ">=24"
@@ -60,6 +60,7 @@
       "dist/**/*",
       "server/**/*",
       "src/aiNoteOutline.js",
+      "src/aiNoteVersions.js",
       "src/libraryFolders.js",
       "src/assistantProtocol.js",
       "desktop/**/*",

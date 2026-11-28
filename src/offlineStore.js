@@ -4,6 +4,7 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { callOfflineAssistant, callOfflineModel, generateOfflinePage, readOfflineText } from './offlineModel';
 import { pdfDocumentOptions } from './pdfAssets';
 import { createFolder, folderName, folderTarget } from './libraryFolders';
+import { appendGeneratedNote } from './aiNoteVersions.js';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -241,8 +242,7 @@ export async function offlineApi(path, options = {}) {
     const doc = currentDoc(current, fields.docId);
     const page = Number(fields.page);
     if (!doc || !Number.isInteger(page) || page < 1 || page > doc.pages) throw new Error('原文页不存在');
-    const existing = current.notes.find((note) => note.docId === doc.id && note.page === page && note.kind === 'ai' && !note.deleted);
-    if (existing && !fields.preview) throw new Error('本页已有智能笔记，请单页预览差异后确认替换');
+    const existing = current.notes.filter((note) => note.docId === doc.id && note.page === page && note.kind === 'ai' && !note.deleted).at(-1);
     const ai = await generateOfflinePage({ ...fields, page, signal: options.signal }, offlinePdf);
     options.signal?.throwIfAborted();
     if (fields.preview) {
@@ -250,35 +250,14 @@ export async function offlineApi(path, options = {}) {
       previews.set(token, { docId: doc.id, page, ai, createdAt: Date.now() });
       return { token, ai, previous: existing?.ai || null };
     }
-    return change((next) => {
-      let note = next.notes.find((item) => item.docId === doc.id && item.page === page && item.kind === 'ai' && !item.deleted);
-      if (!note) {
-        note = { id: crypto.randomUUID(), docId: doc.id, page, order: 0, title: `第 ${page} 页 · 智能笔记`, kind: 'ai', blocks: [], links: [], createdAt: new Date().toISOString(), deleted: false };
-        next.notes.push(note);
-      }
-      note.ai = ai;
-      note.status = 'done';
-      note.updatedAt = new Date().toISOString();
-      return note;
-    });
+    return change(next => appendGeneratedNote(next, { docId: doc.id, page, ai }));
   }
   if (path === '/generate/commit' && method === 'POST') {
     const token = body(options).token;
     const preview = previews.get(token);
     if (!preview || Date.now() - preview.createdAt > 15 * 60_000) throw new Error('预览已过期，请重新生成');
     previews.delete(token);
-    return change((current) => {
-      if (!currentDoc(current, preview.docId)) throw new Error('资料不存在');
-      let note = current.notes.find((item) => item.docId === preview.docId && item.page === preview.page && item.kind === 'ai' && !item.deleted);
-      if (!note) {
-        note = { id: crypto.randomUUID(), docId: preview.docId, page: preview.page, order: 0, title: `第 ${preview.page} 页 · 智能笔记`, kind: 'ai', blocks: [], links: [], createdAt: new Date().toISOString(), deleted: false };
-        current.notes.push(note);
-      }
-      note.ai = preview.ai;
-      note.status = 'done';
-      note.updatedAt = new Date().toISOString();
-      return note;
-    });
+    return change(current => appendGeneratedNote(current, preview));
   }
   throw new Error('离线版暂不支持此操作');
 }

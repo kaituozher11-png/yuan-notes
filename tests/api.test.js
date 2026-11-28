@@ -170,7 +170,8 @@ test('document and note API preserves personal work across generation', async (t
   assert.ok(receivedImage);
   assert.equal(generated.data.ai.evidence, undefined);
   assert.equal(generated.data.status, 'done');
-  assert.equal((await request(base, '/api/generate', options(model))).status, 409);
+  const second = await request(base, '/api/generate', options(model));
+  assert.equal(second.status, 200); assert.equal(second.data.generationVersion, 2); assert.notEqual(second.data.id, generated.data.id);
   const preview = await request(base, '/api/generate', options({ ...model, preview: true }));
   assert.equal(preview.status, 200);
   assert.equal(preview.data.previous.summary, 'Energy is conserved.');
@@ -189,11 +190,13 @@ test('document and note API preserves personal work across generation', async (t
   assert.equal(state.notes.find((n) => n.id === created.data.id).blocks[0].text, 'My own explanation');
   assert.deepEqual(state.notes.find((n) => n.id === created.data.id).blocks[1], mixed);
   assert.deepEqual(state.notes.find((n) => n.id === created.data.id).links, [movedLink]);
-  assert.equal(state.notes.filter((n) => n.kind === 'ai').length, 1);
+  assert.equal(state.notes.filter((n) => n.kind === 'ai').length, 4);
+  assert.deepEqual(state.notes.filter(n => n.kind === 'ai').map(n => n.generationVersion), [1, 2, 3, 4]);
+  assert.deepEqual(state.notes.find(n => n.id === generated.data.id).ai, generated.data.ai);
   const aiId = state.notes.find((n) => n.kind === 'ai').id;
-  const reordered = await request(base, '/api/notes/reorder', options({ ids: [created.data.id, aiId] }));
+  const reordered = await request(base, '/api/notes/reorder', options({ ids: [created.data.id, ...state.notes.filter(n => n.kind === 'ai').map(n => n.id)] }));
   assert.equal(reordered.status, 200);
-  assert.deepEqual(reordered.data.map((n) => n.order), [1, 2]);
+  assert.deepEqual(reordered.data.map((n) => n.order), [1, 2, 3, 4, 5]);
   assert.equal((await request(base, '/api/notes/reorder', options({ ids: [aiId, aiId] }))).status, 400);
   assert.equal((await readFile(path.join(dir, 'state.json'), 'utf8')).includes('test-key'), false);
   const backup = await fetch(`${base}/api/backup`);

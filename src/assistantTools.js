@@ -111,7 +111,7 @@ function appendParts(blocks, parts, env) {
 }
 
 const docInfo = doc => ({ id: doc.id, name: doc.name, course: doc.course, pages: doc.pages, folderId: doc.folderId || null, deleted: !!doc.deleted });
-const noteInfo = note => ({ id: note.id, docId: note.docId, page: note.page, title: note.title, kind: note.kind, deleted: !!note.deleted });
+const noteInfo = note => ({ id: note.id, docId: note.docId, page: note.page, title: note.title, kind: note.kind, deleted: !!note.deleted, ...(note.generationVersion ? { generationVersion: note.generationVersion } : {}) });
 
 export function assistantContext(state, current, attachments = []) {
   const doc = state.docs.find(item => item.id === current.docId && !item.deleted);
@@ -354,8 +354,6 @@ export async function prepareAssistantTool(tool, env) {
         const results = [];
         for (const page of args.pages) {
           env.signal?.throwIfAborted(); await latestDocPage(doc, page);
-          const fresh = await env.api('/state');
-          if (fresh.notes.some(item => item.docId === doc.id && item.page === page && item.kind === 'ai' && !item.deleted)) { results.push({ page, skipped: '已有智能笔记，未覆盖' }); continue; }
           try {
             const note = await env.api('/generate', { method: 'POST', body: JSON.stringify({ ...env.model, docId: doc.id, page, outline, mode, guidance }), signal: env.signal });
             results.push({ page, note: noteInfo(note) });
@@ -371,7 +369,7 @@ export async function prepareAssistantTool(tool, env) {
       const mode = validateGenerationMode(args.mode ?? (args.outline || args.preset ? 'template' : 'adaptive'));
       const outline = mode === 'template' ? validateAiOutline(args.outline || aiNotePresets[preset].titles) : undefined; const guidance = validateAiGuidance(args.guidance || '');
       check(env.previews, '草稿会话尚未就绪');
-      const previous = state.notes.find(note => note.docId === doc.id && note.page === page && note.kind === 'ai' && !note.deleted)?.ai || null;
+      const previous = state.notes.filter(note => note.docId === doc.id && note.page === page && note.kind === 'ai' && !note.deleted).at(-1)?.ai || null;
       return task(`准备《${doc.name}》第${page}页的智能笔记对比草稿`, async () => {
         const candidate = await env.api('/generate', { method: 'POST', body: JSON.stringify({ ...env.model, docId: doc.id, page, outline, mode, guidance, preview: true }), signal: env.signal });
         env.previews.set(candidate.token, { ...candidate, docId: doc.id, page, previous });
@@ -381,14 +379,9 @@ export async function prepareAssistantTool(tool, env) {
     case 'commit_generation': {
       const candidate = env.previews?.get(args.token); check(candidate, '本次对话没有该草稿，请先生成对比草稿');
       const doc = docBy(candidate.docId);
-      const unchanged = async () => {
-        const latest = (await env.api('/state')).notes.find(note => note.docId === doc.id && note.page === candidate.page && note.kind === 'ai' && !note.deleted)?.ai || null;
-        check(JSON.stringify(latest) === JSON.stringify(candidate.previous), '原智能笔记已经变化，请重新生成对比草稿');
-      };
-      await unchanged();
-      return { ...task(`替换《${doc.name}》第${candidate.page}页智能笔记正文，保留个人补充`, async () => {
-        await unchanged(); const note = await request('/generate/commit', 'POST', { token: args.token }); env.previews.delete(args.token); return noteInfo(note);
-      }, true), confirmData: { 原有内容: candidate.previous, 新草稿: candidate.ai } };
+      return { ...task(`保存《${doc.name}》第${candidate.page}页的新版本，旧笔记保留`, async () => {
+        const note = await request('/generate/commit', 'POST', { token: args.token }); env.previews.delete(args.token); return noteInfo(note);
+      }, true), confirmData: { 原有内容保留: candidate.previous, 新版本草稿: candidate.ai } };
     }
     case 'create_template': case 'update_template': {
       const name = str(args.name, 80, '模板名称'); check(Array.isArray(args.sections) && args.sections.length <= 30); args.sections.forEach(item => str(item, 80, '模板标题')); if (args.style) styleOf(args.style);

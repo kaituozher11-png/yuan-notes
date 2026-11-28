@@ -12,6 +12,7 @@ import { callAssistant, callModel, generatePage } from './agent.js';
 import { validateMarkup } from './markup.js';
 import { createAuth } from './auth.js';
 import { createFolder, folderName, folderTarget } from '../src/libraryFolders.js';
+import { appendGeneratedNote } from '../src/aiNoteVersions.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -302,8 +303,7 @@ app.post('/api/generate', async (req, res) => {
   try {
     const s = await getState(); const doc = currentDoc(s, req.body.docId); const page = Number(req.body.page);
     if (!doc || !Number.isInteger(page) || page < 1 || page > doc.pages) return res.status(404).json({ error: '原文页不存在' });
-    const existing = s.notes.find((n) => n.docId === doc.id && n.page === page && n.kind === 'ai' && !n.deleted);
-    if (existing && !req.body.preview) return res.status(409).json({ error: '本页已有智能笔记，请单页预览差异后确认替换' });
+    const existing = s.notes.filter((n) => n.docId === doc.id && n.page === page && n.kind === 'ai' && !n.deleted).at(-1);
     const ai = await generatePage({ ...req.body, page, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(req.body.mode === 'adaptive' ? 240000 : 120000)]) });
     controller.signal.throwIfAborted();
     if (req.body.preview) {
@@ -311,11 +311,7 @@ app.post('/api/generate', async (req, res) => {
       pendingPreviews.set(token, { userId: currentUserId(), docId: doc.id, page, ai, createdAt: Date.now() });
       return res.json({ token, ai, previous: existing?.ai || null });
     }
-    const note = await mutate((state) => {
-      let item = state.notes.find((n) => n.docId === doc.id && n.page === page && n.kind === 'ai' && !n.deleted);
-      if (!item) { item = { id: crypto.randomUUID(), docId: doc.id, page, order: 0, title: `第 ${page} 页 · 智能笔记`, kind: 'ai', blocks: [], links: [], createdAt: new Date().toISOString(), deleted: false }; state.notes.push(item); }
-      item.ai = ai; item.status = 'done'; item.updatedAt = new Date().toISOString(); return item;
-    });
+    const note = await mutate(state => appendGeneratedNote(state, { docId: doc.id, page, ai }));
     res.json(note);
   } catch (err) { if (!controller.signal.aborted) error(res, err); }
   finally { res.off('close', disconnected); }
@@ -325,12 +321,7 @@ app.post('/api/generate/commit', async (req, res) => {
   if (!candidate || candidate.userId !== currentUserId() || Date.now() - candidate.createdAt > 15 * 60_000) return res.status(410).json({ error: '预览已过期，请重新生成' });
   pendingPreviews.delete(req.body.token);
   try {
-    const note = await mutate((s) => {
-      if (!currentDoc(s, candidate.docId)) throw new Error('资料不存在');
-      let item = s.notes.find((n) => n.docId === candidate.docId && n.page === candidate.page && n.kind === 'ai' && !n.deleted);
-      if (!item) { item = { id: crypto.randomUUID(), docId: candidate.docId, page: candidate.page, order: 0, title: `第 ${candidate.page} 页 · 智能笔记`, kind: 'ai', blocks: [], links: [], createdAt: new Date().toISOString(), deleted: false }; s.notes.push(item); }
-      item.ai = candidate.ai; item.status = 'done'; item.updatedAt = new Date().toISOString(); return item;
-    });
+    const note = await mutate(state => appendGeneratedNote(state, candidate));
     res.json(note);
   } catch (err) { error(res, err); }
 });

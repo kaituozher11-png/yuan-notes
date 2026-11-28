@@ -52,6 +52,7 @@ import remarkGfm from "remark-gfm";
 import rehypeKatex from "rehype-katex";
 import { api, json } from "./api";
 import { applyModelPreset, modelProviders } from './modelCatalog';
+import { generatedPageCount } from './aiNoteVersions.js';
 import { aiNotePresets, aiNoteSections, validateAiGuidance, validateAiOutline } from './aiNoteOutline';
 import { clampNoteWidth, noteWidthLimits } from './notePaneLayout';
 import { seal, openVault } from "./vault";
@@ -682,7 +683,7 @@ export default function App({ account, onAccount }) {
       if (x.deleted) return false;
       if (folderId ? x.folderId !== folderId : !query.trim() && x.folderId) return false;
       const notes = data.notes.filter((n) => n.docId === x.id && !n.deleted);
-      if (libraryFilter === 'ungenerated' && notes.filter((n) => n.kind === 'ai').length >= x.pages) return false;
+      if (libraryFilter === 'ungenerated' && generatedPageCount(notes, x.id) >= x.pages) return false;
       if (libraryFilter === 'mine' && !notes.some((n) => n.kind === 'user' || n.blocks?.length)) return false;
       const needle = query.trim().toLowerCase();
       if (!needle) return true;
@@ -1118,62 +1119,13 @@ export default function App({ account, onAccount }) {
       const pages = pagesToGenerate();
       stopRef.current = false;
       setBusy(true);
-      setProgress({ done: 0, total: pages.length, page: pages[0], errors: [] });
-      if (
-        pages.length === 1 &&
-        data.notes.some(
-          (n) =>
-            n.docId === docId &&
-            n.page === pages[0] &&
-            n.kind === "ai" &&
-            !n.deleted,
-        )
-      ) {
-        const candidate = await api(
-          "/generate",
-          json("POST", {
-            docId,
-            page: pages[0],
-            endpoint: activeModel.endpoint,
-            model: activeModel.model,
-            key: selectedKey,
-            vision: activeModel.vision,
-            outline,
-            mode,
-            guidance,
-            preview: true,
-          }),
-        );
-        setPreview({ ...candidate, page: pages[0] });
-        setProgress(null);
-        setBusy(false);
-        return;
-      }
+      setProgress({ done: 0, generated: 0, total: pages.length, page: pages[0], errors: [] });
       for (let i = 0; i < pages.length; i++) {
         if (stopRef.current) break;
         const target = pages[i];
         setProgress((p) => ({ ...p, page: target }));
-        if (
-          data.notes.some(
-            (n) =>
-              n.docId === docId &&
-              n.page === target &&
-              n.kind === "ai" &&
-              !n.deleted,
-          )
-        ) {
-          setProgress((p) => ({
-            ...p,
-            done: i + 1,
-            errors: [
-              ...p.errors,
-              `第 ${target} 页已有智能笔记，已跳过；单独选择该页可预览替换`,
-            ],
-          }));
-          continue;
-        }
         try {
-          await api(
+          const made = await api(
             "/generate",
             json("POST", {
               docId,
@@ -1187,7 +1139,9 @@ export default function App({ account, onAccount }) {
               guidance,
             }),
           );
-          await reload();
+          setProgress(p => ({ ...p, generated: p.generated + 1 }));
+          await reload().catch(() => notify('新版本已保存，但界面刷新失败，请稍后刷新查看'));
+          if (pages.length === 1 || target === notePage) { setNoteId(made.id); setNotePage(made.page); setLayout('split'); }
         } catch (e) {
           setProgress((p) => ({
             ...p,
@@ -1210,7 +1164,7 @@ export default function App({ account, onAccount }) {
       await reload();
       setPreview(null);
       setDialog(null);
-      notify("已替换智能笔记，个人补充已保留");
+      notify("已保存新的智能笔记版本，旧笔记已保留");
     } catch (e) {
       notify(e.message);
     }
@@ -1369,9 +1323,7 @@ export default function App({ account, onAccount }) {
             {filteredDocs.length ? (
               <div className="doc-list">
                 {filteredDocs.map((item) => {
-                  const count = data.notes.filter(
-                    (n) => n.docId === item.id && n.kind === "ai" && !n.deleted,
-                  ).length;
+                  const count = generatedPageCount(data.notes, item.id);
                   const needle = query.trim().toLowerCase();
                   const matchedNote = needle && !`${item.name} ${item.course} ${item.filename}`.toLowerCase().includes(needle) ? data.notes.find((n) => n.docId === item.id && !n.deleted && noteSearchText(n).includes(needle)) : null;
                   return (
@@ -2214,7 +2166,7 @@ export default function App({ account, onAccount }) {
                   <>
                     <p className="muted">
                       第 {preview.page}{" "}
-                      页的新草稿已准备好。确认后替换智能笔记正文；个人补充和链接继续保留。
+                      页的新草稿已准备好。确认后新增编号版本；旧笔记、个人补充和链接保持原样。
                     </p>
                     <div className="compare-grid">
                       <div>
@@ -2254,7 +2206,7 @@ export default function App({ account, onAccount }) {
                         className="primary-button"
                         onClick={acceptPreview}
                       >
-                        确认替换
+                        保存为新版本
                       </button>
                     </div>
                   </>
@@ -2394,8 +2346,8 @@ export default function App({ account, onAccount }) {
                           {busy
                             ? `正在处理第 ${progress.page} 页`
                             : progress.errors.length
-                              ? `处理结束，${progress.errors.length} 页未生成`
-                              : "全部生成完成"}
+                              ? `处理结束，${progress.generated ?? 0} 页已新增版本，${progress.errors.length} 页生成失败`
+                              : progress.done < progress.total ? `已停止，${progress.generated ?? 0} 页已新增版本` : `全部完成，${progress.generated ?? 0} 页已新增版本`}
                         </small>
                         {progress.errors.map((message, index) => (
                           <p key={index} className="error-line">

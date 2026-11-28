@@ -93,7 +93,25 @@ test('adaptive API preview preserves old AI and personal work until explicit com
   invalid = false; const made = await api('/generate', post(input)); assert.equal(made.status, 200); assert.equal(made.value.ai.organization.mode, 'adaptive');
   await api('/notes/' + made.value.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: [{ id: 'own', type: 'text', text: '个人推导保留' }] }) });
   const old = (await api('/state')).value.notes[0], preview = await api('/generate', post({ ...input, preview: true })); assert.equal(preview.status, 200); assert.deepEqual((await api('/state')).value.notes[0], old);
-  const committed = await api('/generate/commit', post({ token: preview.value.token })); assert.equal(committed.status, 200); assert.equal(committed.value.blocks[0].text, '个人推导保留');
+  const committed = await api('/generate/commit', post({ token: preview.value.token })); assert.equal(committed.status, 200); assert.notEqual(committed.value.id, old.id); assert.equal(committed.value.generationVersion, 2); assert.deepEqual((await api('/state')).value.notes.find(n => n.id === old.id), old);
+  const parallel = await Promise.all([api('/generate', post(input)), api('/generate', post(input))]);
+  assert.deepEqual(parallel.map(result => result.value.generationVersion).sort(), [3, 4]);
+  assert.equal(new Set(parallel.map(result => result.value.id)).size, 2);
+  const beforeFailure = (await api('/state')).value.notes; invalid = true;
+  assert.equal((await api('/generate', post(input))).status, 400);
+  assert.deepEqual((await api('/state')).value.notes, beforeFailure);
+  invalid = false;
+  await api('/notes/' + parallel[1].value.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deleted: true }) });
+  const next = await api('/generate', post(input)); assert.equal(next.value.generationVersion, 5);
+  const agentApi = async (route, options) => { const result = await api(route, { ...options, headers: { 'Content-Type': 'application/json' } }); if (result.status !== 200) throw Error(result.value.error); return result.value; };
+  const agentEnv = { api: agentApi, model: { endpoint: input.endpoint, model: input.model, key: input.key } };
+  const generate = { name: 'generate_notes', args: { docId: imported.value.id, pages: [1], mode: 'adaptive' } };
+  const sixth = await (await prepareAssistantTool(generate, agentEnv)).run();
+  const seventh = await (await prepareAssistantTool(generate, agentEnv)).run();
+  assert.equal(sixth[0].note.generationVersion, 6); assert.equal(seventh[0].note.generationVersion, 7);
+
+  assert.deepEqual((await api('/state')).value.notes.find(note => note.id === old.id), old);
+
 });
 
 test('real API resumes two screenshot failures, uses native repair and creates one coordinate-free map after all ten pages are read', async t => {

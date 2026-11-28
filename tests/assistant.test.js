@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { appendGeneratedNote } from '../src/aiNoteVersions.js';
 import { assistantTools, assistantMessages, parseAssistantTurn } from '../src/assistantProtocol.js';
 import { assistantContext, prepareAssistantTool } from '../src/assistantTools.js';
 import { runAssistantTask } from '../src/assistantRunner.js';
@@ -34,7 +35,7 @@ function fixture() {
       else if (path.endsWith('/markup')) { const [, , id, , page] = path.split('/'); const doc = state.docs.find(item => item.id === id); doc.markup ||= {}; doc.markup[page] = data; result = data; }
       else if (path.startsWith('/docs/')) { result = state.docs.find(item => item.id === path.split('/').at(-1)); Object.assign(result, data); }
       else if (path === '/generate' && data.preview) result = { token: 'preview-token', ai: { sections: [{ title: '新标题', content: '新正文' }] }, previous: state.notes.find(note => note.docId === data.docId && note.page === data.page && note.kind === 'ai')?.ai || null };
-      else if (path === '/generate/commit') { const preview = env.previews.get(data.token); result = state.notes.find(note => note.docId === preview.docId && note.page === preview.page && note.kind === 'ai'); result.ai = preview.ai; }
+      else if (path === '/generate/commit') { const preview = env.previews.get(data.token); result = appendGeneratedNote(state, preview); }
       else if (path === '/generate') { result = { id: 'ai' + data.page, docId: data.docId, page: data.page, title: 'AI', kind: 'ai', deleted: false }; state.notes.push(result); }
       else if (path === '/templates') { result = { id: 'template' + state.templates.length, ...data }; state.templates.push(result); }
       else if (path.startsWith('/templates/')) { const id = path.split('/').at(-1); if (options.method === 'DELETE') state.templates = state.templates.filter(item => item.id !== id); else Object.assign(state.templates.find(item => item.id === id), data); result = { ok: true }; }
@@ -150,7 +151,7 @@ test('assistant generation, templates, download and interactive entry tools are 
   const result = await f.execute('generate_notes', { docId: 'doc1', pages: [1, 2], preset: 'paper', outline: ['公式', '重点'], guidance: '解释推导' });
   assert.equal(result.length, 2);
   const repeated = await f.execute('generate_notes', { docId: 'doc1', pages: [1, 3], preset: 'course' });
-  assert.ok(repeated[0].skipped);
+  assert.ok(repeated[0].note); assert.equal(f.writes.filter(w => w[0] === '/generate').length, 4);
   await f.execute('update_note', { noteId: 'ai1', changes: { ai: { sections: [{ title: '结论', content: '仅修改AI部分' }] } } });
   const template = await f.execute('create_template', { name: '论文', sections: ['摘要'], style: { paper: 'lined' } });
   await f.execute('update_template', { templateId: template.id, name: '论文模板', sections: ['方法', '结论'] });
@@ -234,19 +235,20 @@ test('assistant incrementally edits large maps without dropping untouched conten
   assert.equal(f.writes.length, count);
 });
 
-test('assistant regeneration shows concrete old and new notes before replacing and refuses stale or forged drafts', async () => {
+test('assistant preview commits a new numbered copy and preserves edits made to old notes', async () => {
   const f = fixture();
-  f.state.notes.push({ id: 'ai1', docId: 'doc1', page: 1, kind: 'ai', title: '智能笔记', ai: { sections: [{ title: '旧标题', content: '旧正文' }] }, blocks: [{ id: 'personal', type: 'text', text: '个人补充' }], deleted: false });
+  const original = { id: 'ai1', docId: 'doc1', page: 1, kind: 'ai', title: '智能笔记', ai: { sections: [{ title: '旧标题', content: '旧正文' }] }, blocks: [{ id: 'personal', type: 'text', text: '个人补充' }], deleted: false };
+  f.state.notes.push(original);
   await assert.rejects(f.execute('commit_generation', { token: 'forged' }), /没有该草稿/);
   const candidate = await f.execute('preview_generation', { docId: 'doc1', page: 1, preset: 'paper' });
   const task = await prepareAssistantTool(call('commit_generation', { token: candidate.token }), f.env);
-  assert.equal(task.confirm, true); assert.equal(task.confirmData.原有内容.sections[0].content, '旧正文'); assert.equal(task.confirmData.新草稿.sections[0].content, '新正文');
-  assert.equal(f.state.notes.at(-1).ai.sections[0].content, '旧正文');
-  await task.run();
-  assert.equal(f.state.notes.at(-1).ai.sections[0].content, '新正文'); assert.equal(f.state.notes.at(-1).blocks[0].text, '个人补充');
-  await f.execute('preview_generation', { docId: 'doc1', page: 1 });
-  f.state.notes.at(-1).ai.sections[0].content = '刚修改';
-  await assert.rejects(f.execute('commit_generation', { token: candidate.token }), /已经变化/);
+  assert.equal(task.confirm, true); assert.equal(task.confirmData.原有内容保留.sections[0].content, '旧正文');
+  original.ai.sections[0].content = '用户刚编辑旧笔记';
+  const saved = await task.run();
+  assert.notEqual(saved.id, original.id); assert.equal(saved.generationVersion, 2);
+  assert.equal(original.ai.sections[0].content, '用户刚编辑旧笔记'); assert.equal(original.blocks[0].text, '个人补充');
+  assert.equal(f.state.notes.at(-1).ai.sections[0].content, '新正文');
+  await assert.rejects(f.execute('commit_generation', { token: candidate.token }), /没有该草稿/);
 });
 
 test('assistant loop observes real results before its next step and cancels without writes', async () => {
