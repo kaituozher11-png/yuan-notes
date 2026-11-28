@@ -550,6 +550,8 @@ export default function App({ account, onAccount }) {
   const [course, setCourse] = useState("");
   const [busy, setBusy] = useState(false);
   const [models, setModels] = useState(() => loadModels(account));
+  const [assistantRunning, setAssistantRunning] = useState(false);
+  const removedModels = useRef(new Set());
   const [keys, setKeys] = useState({});
   const [modelForm, setModelForm] = useState({ ...blankModelForm });
   const [modelPreset, setModelPreset] = useState('');
@@ -995,6 +997,27 @@ export default function App({ account, onAccount }) {
     await reload();
     setNoteId(null);
   }
+  function removeModel(item) {
+    if (busy || assistantRunning) return notify('请先完成或停止当前任务，再删除模型连接');
+    if (!confirm(`删除模型连接“${item.name}”？将移除本机保存的连接和加密密钥，已有资料与笔记保留。`)) return;
+    const remaining = models.filter(model => model.id !== item.id);
+    // Persist first: a storage failure must not pretend that the connection was removed.
+    try { saveModels(remaining, account); }
+    catch { return notify('删除失败：无法保存模型设置，请检查设备存储后重试'); }
+    removedModels.current.add(item.id);
+    setModels(remaining);
+    setKeys(current => { const next = { ...current }; delete next[item.id]; return next; });
+    if (activeModel?.id === item.id) {
+      setModelId(remaining[0]?.id || null);
+      setUnlockPhrase('');
+      setModelTestResult(null);
+      setEditingModel(null);
+    } else {
+      setModelTestResult(current => current?.id === item.id ? null : current);
+      setEditingModel(current => current?.id === item.id ? null : current);
+    }
+    notify('模型连接已删除');
+  }
   async function saveModel(event) {
     event.preventDefault();
     try {
@@ -1025,6 +1048,7 @@ export default function App({ account, onAccount }) {
     try {
       if (!activeModel) throw new Error('请先选择模型连接');
       const key = await openVault(activeModel.encrypted, unlockPhrase);
+      if (removedModels.current.has(activeModel.id)) return;
       setKeys((current) => ({ ...current, [activeModel.id]: key }));
       setUnlockPhrase("");
       notify("模型连接已解锁");
@@ -1811,8 +1835,10 @@ export default function App({ account, onAccount }) {
                 <h2>已保存的连接</h2>
                 {models.length ? (
                   models.map((item, index) => (
+                    <div key={item.id} className="saved-model-entry">
                     <button
-                      key={item.id}
+                      type="button"
+                      aria-label={`选择模型连接：${item.name}（${index + 1}）`}
                       className={
                         activeModel?.id === item.id
                           ? "model-row active"
@@ -1831,6 +1857,10 @@ export default function App({ account, onAccount }) {
                       </span>
                       {keys[item.id] && <Check size={16} />}
                     </button>
+                    <button type="button" className="saved-model-delete" disabled={busy || assistantRunning}
+                      aria-label={`删除模型连接：${item.name}（${index + 1}）`} title={`删除连接：${item.name}`}
+                      onClick={() => removeModel(item)}><Trash2 size={17} /><span>删除</span></button>
+                    </div>
                   ))
                 ) : (
                   <div className="muted">尚未添加模型连接。</div>
@@ -1860,24 +1890,7 @@ export default function App({ account, onAccount }) {
                             <div><button className="secondary-button" type="submit">保存</button><button className="text-button" type="button" onClick={() => setEditingModel(null)}>取消</button></div>
                           </form>
                         ) : <button className="text-button" type="button" onClick={() => setEditingModel({ id: activeModel.id, model: activeModel.model })}>修改模型 ID</button>}
-                        <button
-                          className="danger-button"
-                          onClick={() => {
-                            if (confirm("删除此模型连接和加密密钥？")) {
-                              setModels(
-                                models.filter((x) => x.id !== activeModel.id),
-                              );
-                              const next = { ...keys };
-                              delete next[activeModel.id];
-                              setKeys(next);
-                              setModelId(null);
-                              setModelTestResult(null);
-                              setEditingModel(null);
-                            }
-                          }}
-                        >
-                          删除连接
-                        </button>
+
                       </>
                     ) : (
                       <>
@@ -2067,9 +2080,9 @@ export default function App({ account, onAccount }) {
       </div>
       {assistantStarted && <Suspense fallback={<div className="toast">正在打开智能助手…</div>}><AssistantPanel
         open={assistantOpen} onClose={() => setAssistantOpen(false)} models={models} modelId={modelId} setModelId={setModelId}
-        model={activeModel} apiKey={selectedKey} externallyBusy={busy} flush={flushAssistantSaves} reload={reload}
+        model={activeModel} apiKey={selectedKey} externallyBusy={busy} onRunningChange={setAssistantRunning} flush={flushAssistantSaves} reload={reload}
         context={{ docId, docName: doc?.name, page, noteId: note?.id, selection: selectedQuote || highlight, rect: selectedRect }}
-        unlock={async phrase => { if (!activeModel) throw new Error('请先选择模型'); const key = await openVault(activeModel.encrypted, phrase); setKeys(current => ({ ...current, [activeModel.id]: key })); }}
+        unlock={async phrase => { if (!activeModel) throw new Error('请先选择模型'); const key = await openVault(activeModel.encrypted, phrase); if (removedModels.current.has(activeModel.id)) throw new Error('模型连接已删除'); setKeys(current => ({ ...current, [activeModel.id]: key })); }}
         navigate={assistantNavigate} feature={assistantFeature}
         view={changes => {
           if (changes.layout !== undefined) setLayout(changes.layout);

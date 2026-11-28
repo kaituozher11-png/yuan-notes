@@ -15,7 +15,7 @@ import './assistant.css';
 const examples = ['帮我把论文整理到一个新文件夹', '总结当前页，并添加一份复习笔记', '根据当前页制作思维导图', '在当前页放一张提醒复习的便利贴'];
 const message = (type, text, extra = {}) => ({ id: crypto.randomUUID(), type, text, ...extra });
 
-export default function AssistantPanel({ open, onClose, models, modelId, setModelId, model, apiKey, unlock, context, flush, reload, navigate, feature, view, externallyBusy }) {
+export default function AssistantPanel({ open, onClose, models, modelId, setModelId, model, apiKey, unlock, context, flush, reload, navigate, feature, view, externallyBusy, onRunningChange }) {
   const [events, setEvents] = useState([]);
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
@@ -70,7 +70,7 @@ export default function AssistantPanel({ open, onClose, models, modelId, setMode
     if (!command || command.length > 4000) return setError('请输入1到4000字的指令');
     if (!modelOnline()) return setError('智能助手需要联网，请联网后重试');
     if (!model || !apiKey) return setError('请先选择并解锁一个模型连接');
-    active.current = true; setRunning(true); setError(''); setInput('');
+    active.current = true; setRunning(true); onRunningChange?.(true); setError(''); setInput('');
     const abort = new AbortController(); controller.current = abort;
     const selected = { endpoint: model.endpoint, model: model.model, key: apiKey, vision: model.vision };
     const currentAttachments = resuming ? suspended.current.attachments : [...attachments];
@@ -132,7 +132,7 @@ export default function AssistantPanel({ open, onClose, models, modelId, setMode
       memory.current.push({ role: 'user', content: command }, { role: 'assistant', content: text + '。如需继续，请先查找并检查当前资料状态，不要重复写入。' });
       await latest.current.reload().catch(() => {});
     } finally {
-      active.current = false; setRunning(false); setPending(null); controller.current = null; confirmation.current = null;
+      active.current = false; setRunning(false); onRunningChange?.(false); setPending(null); controller.current = null; confirmation.current = null;
     }
   }
   async function uploadFiles(event) {
