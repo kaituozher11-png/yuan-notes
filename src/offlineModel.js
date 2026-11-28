@@ -3,6 +3,7 @@ import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { pdfDocumentOptions } from './pdfAssets';
 import { generateOrganizedNote, validateGenerationMode, validateAiGuidance, validateAiOutline } from './aiNoteOutline';
 import { requestAssistantTurn } from './assistantProtocol';
+import { requestNoteJson } from './aiNoteRequest';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -58,7 +59,7 @@ export async function callOfflineAssistant(input) {
     input.signal?.throwIfAborted();
     if (response.status !== 200) throw serviceError(response.status, response.body.slice(0, maxResponse), input.key);
     let data;
-    try { data = JSON.parse(response.body.slice(0, maxResponse)); }
+    try { data = JSON.parse(response.body); }
     catch { throw new Error('助手返回内容不是有效 JSON'); }
     return data.choices?.[0];
   });
@@ -85,22 +86,6 @@ if (typeof window !== 'undefined') {
   };
 }
 
-function parseAnswer(answer, finishReason, test) {
-  const raw = answer.trim();
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  for (const value of [raw, fenced, start >= 0 && end > start ? raw.slice(start, end + 1) : null]) {
-    if (!value) continue;
-    try {
-      const parsed = JSON.parse(value.trim());
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-    } catch { /* Continue with the next wrapper. */ }
-  }
-  if (finishReason === 'length' || finishReason === 'max_tokens') throw new Error('模型输出被截断，请改用输出上限更高的模型');
-  throw new Error(test ? '模型已连接，但未按要求返回笔记格式' : '模型未返回可读取的笔记格式');
-}
-
 function serviceError(status, body, key) {
   const fallback = status === 401 || status === 403 ? '密钥无效或无权使用此模型'
     : status === 402 ? '模型账户余额不足'
@@ -121,31 +106,31 @@ export async function callOfflineModel({ endpoint, key, model, page, text, image
   if (!key || !model) throw new Error('请填写模型名称和 API 密钥');
   const url = normalizeModelEndpoint(endpoint);
   const content = test ? '请返回最小笔记 JSON。' : [{ type: 'text', text: `第 ${page} 页提取文字：\n${text || '无可提取文字，请依据页面图片，并标注需核对。'}` }, ...(image ? [{ type: 'image_url', image_url: { url: image } }] : [])];
-  const request = async (instruction, stage) => {
-    signal?.throwIfAborted();
-    let response;
-    try {
-      response = await nativeRequest(url, {
-        model, messages: [{ role: 'system', content: instruction }, { role: 'user', content }],
-        temperature: test ? 0 : 0.2, max_tokens: test ? 512 : stage === 'plan' ? 1000 : 3500,
-      }, key, signal);
+  const request = instruction => requestNoteJson({
+    messages: [{ role: 'system', content: instruction }, { role: 'user', content }], signal, test,
+    send: async messages => {
       signal?.throwIfAborted();
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      throw new Error(modelOnline() ? '无法连接模型服务商，请检查网络和接口地址' : '无法生成智能笔记，请联网');
-    }
-    if (response.status !== 200) {
-      if (!modelOnline()) throw new Error('无法生成智能笔记，请联网');
-      throw serviceError(response.status, response.body.slice(0, maxResponse), key);
-    }
-    let data;
-    try { data = JSON.parse(response.body.slice(0, maxResponse)); }
-    catch { throw new Error('模型返回内容不是有效 JSON'); }
-    const choice = data.choices?.[0];
-    if (typeof choice?.message?.content !== 'string') throw new Error('模型返回内容格式不兼容');
-    if (choice.finish_reason === 'length' || choice.finish_reason === 'max_tokens') throw new Error('模型输出被截断，暂未保存笔记；请更换输出上限更高的模型');
-    return parseAnswer(choice.message.content, choice.finish_reason, test);
-  };
+      let response;
+      try {
+        response = await nativeRequest(url, {
+          model, messages, temperature: test ? 0 : 0.2,
+        }, key, signal);
+        signal?.throwIfAborted();
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        throw new Error(modelOnline() ? '无法连接模型服务商，请检查网络和接口地址' : '无法生成智能笔记，请联网');
+      }
+      if (response.status !== 200) {
+        if (!modelOnline()) throw new Error('无法生成智能笔记，请联网');
+        throw serviceError(response.status, response.body.slice(0, maxResponse), key);
+      }
+      let data;
+      try { data = JSON.parse(response.body); }
+      catch { throw new Error('模型返回内容不是有效 JSON'); }
+      const choice = data.choices?.[0];
+      return choice;
+    },
+  });
 
   if (test) {
     const ai = await request('这是格式测试。只返回合法 JSON 对象：{"summary":"连接正常","concepts":[],"important":[],"cautions":[],"formula":[],"quiz":[]}。不要解释或代码块。');

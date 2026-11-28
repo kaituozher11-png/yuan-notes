@@ -572,6 +572,7 @@ export default function App({ account, onAccount }) {
   const [preview, setPreview] = useState(null);
   const toastTimer = useRef(null);
   const stopRef = useRef(false);
+  const generationRunning = useRef(false);
   const saves = useRef(new Map());
   const noteWrites = useRef(new Set());
   const panelsRef = useRef(null);
@@ -1107,7 +1108,9 @@ export default function App({ account, onAccount }) {
     if (!found.size) throw new Error("请输入页码");
     return [...found].sort((a, b) => a - b);
   }
-  async function runGeneration() {
+  async function runGeneration(retryFailed = false) {
+    if (generationRunning.current) return;
+    generationRunning.current = true;
     try {
       if (window.YuanOfflineApp && !modelOnline()) throw new Error('无法生成智能笔记，请联网');
       if (!activeModel || !selectedKey)
@@ -1116,10 +1119,12 @@ export default function App({ account, onAccount }) {
       const outline = mode === 'template' ? validateAiOutline(aiOutline.titles) : undefined;
       const guidance = validateAiGuidance(aiOutline.guidance);
       await flushSaves();
-      const pages = pagesToGenerate();
+      if (retryFailed && progress?.docId !== docId) throw new Error('资料已切换，请重新选择生成范围');
+      const pages = retryFailed ? [...new Set(progress?.failedPages || [])] : pagesToGenerate();
+      if (!pages.length) throw new Error('没有需要重试的失败页');
       stopRef.current = false;
       setBusy(true);
-      setProgress({ done: 0, generated: 0, total: pages.length, page: pages[0], errors: [] });
+      setProgress({ docId, done: 0, generated: 0, total: pages.length, page: pages[0], errors: [], failedPages: [] });
       for (let i = 0; i < pages.length; i++) {
         if (stopRef.current) break;
         const target = pages[i];
@@ -1146,6 +1151,7 @@ export default function App({ account, onAccount }) {
           setProgress((p) => ({
             ...p,
             errors: [...p.errors, `第 ${target} 页：${e.message}`],
+            failedPages: [...p.failedPages, target],
           }));
         }
         setProgress((p) => ({ ...p, done: i + 1 }));
@@ -1154,6 +1160,7 @@ export default function App({ account, onAccount }) {
     } catch (e) {
       notify(e.message);
     } finally {
+      generationRunning.current = false;
       setBusy(false);
     }
   }
@@ -2365,10 +2372,13 @@ export default function App({ account, onAccount }) {
                       >
                         {busy ? "完成当前页后停止" : "关闭"}
                       </button>
+                      {!busy && progress?.docId === docId && progress.failedPages?.length > 0 && <button
+                        className="secondary-button" disabled={!selectedKey} onClick={() => runGeneration(true)}
+                      >仅重试失败页（{progress.failedPages.length}）</button>}
                       <button
                         className="primary-button"
                         disabled={busy || !selectedKey}
-                        onClick={runGeneration}
+                        onClick={() => runGeneration()}
                       >
                         <Sparkles size={15} />{" "}
                         {progress && !busy ? "重新运行" : "开始生成"}

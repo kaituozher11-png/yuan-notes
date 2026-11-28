@@ -99,7 +99,36 @@ export async function generateOrganizedNote({ page, outline, guidance = '', mode
   }
   let instruction = generationInstruction(page, titles, guidance);
   if (mode === 'adaptive') instruction += '这些标题已根据本页原文单独拟定，请写清具体概念、推理和证据，内容精简但足以理解；不套其他页面的模板，不输出阅读分析过程。';
-  const answer = await request(instruction, 'write');
+  let answer;
+  try { answer = await request(instruction, 'write'); }
+  catch (error) {
+    if (error.code !== 'NOTE_OUTPUT_TRUNCATED') throw error;
+    signal?.throwIfAborted();
+    if (titles?.length > 1) {
+      // Keep the original source, headings, order and detail. Persist only after
+      // every section succeeds; never turn the first completed section into a note.
+      const sections = [];
+      for (const title of titles) {
+        signal?.throwIfAborted();
+        const part = await request(generationInstruction(page, [title], guidance), 'write');
+        signal?.throwIfAborted();
+        const section = normalizeAiAnswer(part, [title]).sections[0];
+        if (!section.content.trim()) throw new Error('模型返回了空白笔记区块，请重试');
+        sections.push(section);
+      }
+      answer = { sections };
+    } else if (titles === undefined) {
+      answer = {};
+      for (const [key] of legacyTitles) {
+        signal?.throwIfAborted();
+        const part = await request(`${instruction}本次分段生成只需返回字段 ${key}，格式为 ${key === 'summary' ? '{"summary":"摘要正文"}' : `{"${key}":["笔记内容"]}`}。其余字段由其他请求生成，不要返回。不压缩或省略本字段需要说明的内容。`, 'write');
+        signal?.throwIfAborted();
+        if (key === 'summary' ? typeof part?.[key] !== 'string' || !part[key].trim()
+          : !Array.isArray(part?.[key]) || part[key].some(item => typeof item !== 'string')) throw new Error('模型未返回完整的分段笔记，请重试');
+        answer[key] = part[key];
+      }
+    } else throw error;
+  }
   signal?.throwIfAborted();
   const result = normalizeAiAnswer(answer, titles);
   if (mode === 'adaptive') {

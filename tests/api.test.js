@@ -150,12 +150,22 @@ test('document and note API preserves personal work across generation', async (t
   assert.equal((await request(base, `/api/notes/${created.data.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deleted: false }) })).data.deleted, false);
   assert.equal((await request(base, '/api/notes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ docId, page: 2 }) })).status, 400);
 
-  let receivedImage = false;
+  let receivedImage = false, responseMode = 'normal';
   const modelServer = http.createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
+    assert.equal(Object.hasOwn(body, 'max_tokens'), false);
     receivedImage = !!body.messages[1].content.find((part) => part.type === 'image_url')?.image_url.url.startsWith('data:image/jpeg;base64,');
     res.setHeader('content-type', 'application/json');
+    if (responseMode === 'continue') {
+      const content = body.messages.length === 2 ? '{"summary":"完整公式 $\\\\frac{a}' : '{b}$ 与说明","concepts":[],"important":[],"cautions":[],"formula":[],"quiz":[]}';
+      return res.end(JSON.stringify({ choices: [{ finish_reason: body.messages.length === 2 ? 'length' : 'stop', message: { content } }] }));
+    }
+    if (responseMode === 'fail') return res.end(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: '{"summary":"残缺内容' } }] }));
+    if (responseMode === 'split') {
+      const titles = JSON.parse(body.messages[0].content.match(/按以下标题及顺序生成笔记：(\[[^\n]*?\])。/)[1]);
+      return res.end(JSON.stringify({ choices: [{ finish_reason: titles.length > 1 ? 'length' : 'stop', message: { content: titles.length > 1 ? '{"sections":[' : JSON.stringify({ sections: [{ content: `${titles[0]}的完整说明 $E=mc^2$` }] }) } }] }));
+    }
     const answer = body.messages[0].content.includes('"sections"')
       ? { sections: [{ title: 'model title', content: 'Research question' }, { content: 'Result from page' }] }
       : { summary: 'Energy is conserved.', concepts: [], important: [], cautions: [], formula: [], quiz: [], evidence: [{ quote: 'Energy conservation rule', note: 'title' }] };
@@ -205,4 +215,21 @@ test('document and note API preserves personal work across generation', async (t
   const bytes = new Uint8Array(await backup.arrayBuffer());
   assert.deepEqual([...bytes.slice(0, 4)], [80, 75, 3, 4]);
   assert.ok(Buffer.from(bytes).includes(Buffer.from(`images/${image.data.url.split('/').at(-1)}`)));
+  const beforeRecovery = (await request(base, '/api/state')).data.notes;
+  responseMode = 'continue';
+  const recovered = await request(base, '/api/generate', options(model));
+  assert.equal(recovered.status, 200); assert.equal(recovered.data.generationVersion, 5);
+  assert.equal(recovered.data.ai.summary, '完整公式 $\\frac{a}{b}$ 与说明');
+  assert.deepEqual((await request(base, '/api/state')).data.notes.slice(0, beforeRecovery.length), beforeRecovery);
+  const beforeFailure = (await request(base, '/api/state')).data.notes;
+  responseMode = 'fail';
+  const failed = await request(base, '/api/generate', options({ ...model, outline }));
+  assert.equal(failed.status, 400); assert.match(failed.data.error, /被截断/);
+  assert.deepEqual((await request(base, '/api/state')).data.notes, beforeFailure, 'no partial version or old-note mutation on failure');
+  responseMode = 'split';
+  const split = await request(base, '/api/generate', options({ ...model, outline }));
+  assert.equal(split.status, 200); assert.equal(split.data.generationVersion, 6);
+  assert.deepEqual(split.data.ai.sections.map(s => s.title), outline);
+  assert.deepEqual(split.data.ai.sections.map(s => s.content), outline.map(title => `${title}的完整说明 $E=mc^2$`));
+  assert.deepEqual((await request(base, '/api/state')).data.notes.slice(0, beforeFailure.length), beforeFailure);
 });

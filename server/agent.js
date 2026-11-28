@@ -3,6 +3,7 @@ import net from 'node:net';
 import { modelDispatcher, publicModelDispatcher } from './model-network.js';
 import { generateOrganizedNote, validateGenerationMode, validateAiGuidance, validateAiOutline } from '../src/aiNoteOutline.js';
 import { requestAssistantTurn } from '../src/assistantProtocol.js';
+import { requestNoteJson } from '../src/aiNoteRequest.js';
 
 export function normalizeEndpoint(value) {
   const url = new URL(value);
@@ -17,26 +18,6 @@ export function normalizeEndpoint(value) {
   if (pathname.endsWith('/chat/completions')) return url.toString();
   url.pathname = `${pathname}/chat/completions`;
   return url.toString();
-}
-
-function parseNoteAnswer(answer, finishReason, test) {
-  const text = answer.trim();
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  const candidates = [text, fenced, start >= 0 && end > start ? text.slice(start, end + 1) : null];
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    try {
-      const note = JSON.parse(candidate.trim());
-      if (note && typeof note === 'object' && !Array.isArray(note)) return note;
-    } catch { /* Try the next common response wrapper. */ }
-  }
-  if (finishReason === 'length' || finishReason === 'max_tokens')
-    throw new Error('模型输出被截断，未能形成完整笔记；请改用输出上限更高的模型');
-  throw new Error(test
-    ? '模型已连接，但未按要求返回笔记格式；请核对模型 ID 或更换模型'
-    : '模型未返回可读取的笔记格式；可先关闭页面图片再试，或更换模型');
 }
 
 async function modelServiceError(response, key) {
@@ -64,7 +45,7 @@ export async function requestChat({ endpoint, key, model, messages, maxTokens = 
   if (!key || !model) throw new Error('请填写模型名称和 API 密钥');
   let response;
   try {
-    response = await fetch(url, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens, ...(tools ? { tools, tool_choice: toolChoice } : jsonMode ? { response_format: { type: 'json_object' } } : {}) }), signal: signal || AbortSignal.timeout(120000), dispatcher: process.env.YINGXING_PUBLIC === '1' ? publicModelDispatcher() : modelDispatcher(url) });
+    response = await fetch(url, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify({ model, messages, temperature, ...(maxTokens == null ? {} : { max_tokens: maxTokens }), ...(tools ? { tools, tool_choice: toolChoice } : jsonMode ? { response_format: { type: 'json_object' } } : {}) }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000), dispatcher: process.env.YINGXING_PUBLIC === '1' ? publicModelDispatcher() : modelDispatcher(url) });
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     if (error.name === 'TimeoutError') throw new Error('连接模型服务商超时，请检查网络或代理');
@@ -75,8 +56,6 @@ export async function requestChat({ endpoint, key, model, messages, maxTokens = 
   }
   const body = await response.json();
   const choice = body.choices?.[0];
-  const answer = choice?.message?.content;
-  if (!assistant && typeof answer !== 'string') throw new Error('模型返回内容格式不兼容');
   return choice;
 }
 
@@ -86,13 +65,10 @@ export async function callAssistant(input) {
 
 export async function callModel({ endpoint, key, model, page, text, image, outline, mode = 'template', guidance = '', signal, test = false }) {
   const content = test ? '请返回最小笔记 JSON。' : [{ type: 'text', text: `第 ${page} 页提取文字：\n${text || '无可提取文字，请依据页面图片，并标注需核对。'}` }, ...(image ? [{ type: 'image_url', image_url: { url: image } }] : [])];
-  const request = async (instruction, stage) => {
-    signal?.throwIfAborted();
-    const choice = await requestChat({ endpoint, key, model, messages: [{ role: 'system', content: instruction }, { role: 'user', content }], temperature: test ? 0 : 0.2, maxTokens: test ? 512 : stage === 'plan' ? 1000 : 3500, signal });
-    signal?.throwIfAborted();
-    if (choice?.finish_reason === 'length' || choice?.finish_reason === 'max_tokens') throw new Error('模型输出被截断，暂未保存笔记；请更换输出上限更高的模型');
-    return parseNoteAnswer(choice.message.content, choice?.finish_reason, test);
-  };
+  const request = instruction => requestNoteJson({
+    messages: [{ role: 'system', content: instruction }, { role: 'user', content }], signal, test,
+    send: messages => requestChat({ endpoint, key, model, messages, temperature: test ? 0 : 0.2, maxTokens: null, signal }),
+  });
   if (test) {
     const ai = await request('这是格式测试。只返回合法 JSON 对象：{"summary":"连接正常","concepts":[],"important":[],"cautions":[],"formula":[],"quiz":[]}。不要解释或代码块。');
     if (typeof ai.summary !== 'string') throw new Error('模型已连接，但未按要求返回笔记格式');
